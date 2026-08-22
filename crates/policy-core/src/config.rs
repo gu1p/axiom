@@ -23,6 +23,8 @@ pub struct SourceConfig {
     pub include: Vec<String>,
     #[serde(default)]
     pub exclude: Vec<String>,
+    #[serde(default = "default_test_sources")]
+    pub test: Vec<String>,
 }
 
 impl Default for SourceConfig {
@@ -30,6 +32,7 @@ impl Default for SourceConfig {
         Self {
             include: default_includes(),
             exclude: Vec::new(),
+            test: default_test_sources(),
         }
     }
 }
@@ -66,6 +69,21 @@ impl PolicyConfig {
 
 fn default_includes() -> Vec<String> {
     vec!["**/*.rs".to_owned()]
+}
+
+fn default_test_sources() -> Vec<String> {
+    [
+        "tests.rs",
+        "*_test.rs",
+        "*_tests.rs",
+        "tests/**/*.rs",
+        "**/tests.rs",
+        "**/*_test.rs",
+        "**/*_tests.rs",
+        "**/tests/**/*.rs",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 #[derive(Debug, thiserror::Error)]

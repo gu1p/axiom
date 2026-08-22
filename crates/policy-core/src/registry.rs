@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use toml::Table;
 
-use crate::Rule;
+use crate::{CodebaseFacts, Diagnostic, Level, Rule, RuleMetadata, RuleScope};
 
 pub trait RuleFactory: Send + Sync {
     fn id(&self) -> &'static str;
@@ -44,8 +44,45 @@ impl RuleRegistry {
                     .join(", ");
                 format!("unknown rule `{id}`; known rules: {known}")
             })?;
-            rules.push(factory.create(config)?);
+            let (scope, rule_config) = split_scope(id, config)?;
+            let inner = factory.create(&rule_config)?;
+            rules.push(Box::new(ScopedRule { inner, scope }) as Box<dyn Rule>);
         }
         Ok(rules)
+    }
+}
+
+fn split_scope(id: &str, config: &Table) -> Result<(RuleScope, Table), String> {
+    let mut rule_config = config.clone();
+    let Some(value) = rule_config.remove("scope") else {
+        return Ok((RuleScope::All, rule_config));
+    };
+    let scope = value
+        .try_into()
+        .map_err(|error| format!("invalid configuration for `{id}`: invalid scope: {error}"))?;
+    Ok((scope, rule_config))
+}
+
+struct ScopedRule {
+    inner: Box<dyn Rule>,
+    scope: RuleScope,
+}
+
+impl Rule for ScopedRule {
+    fn metadata(&self) -> RuleMetadata {
+        self.inner.metadata()
+    }
+
+    fn level(&self) -> Level {
+        self.inner.level()
+    }
+
+    fn evaluate(&self, facts: &CodebaseFacts, diagnostics: &mut Vec<Diagnostic>) {
+        let mut candidates = Vec::new();
+        self.inner.evaluate(facts, &mut candidates);
+        candidates.retain(|diagnostic| {
+            facts.matches_scope(&diagnostic.path, diagnostic.span.byte_start, self.scope)
+        });
+        diagnostics.extend(candidates);
     }
 }

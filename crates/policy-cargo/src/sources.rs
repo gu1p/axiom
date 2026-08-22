@@ -3,7 +3,7 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::{DirEntry, WalkBuilder};
-use policy_core::{AnalysisError, SourceConfig, SourceUnit};
+use policy_core::{AnalysisError, SourceConfig, SourceKind, SourceUnit};
 
 use crate::workspace::{PackageRoot, PackageRoots};
 
@@ -15,6 +15,7 @@ pub(super) fn load_sources(
 ) -> Result<Vec<SourceUnit>, Vec<AnalysisError>> {
     let include = build_globs(&config.include).map_err(|error| vec![error])?;
     let exclude = build_globs(&config.exclude).map_err(|error| vec![error])?;
+    let test_sources = build_globs(&config.test).map_err(|error| vec![error])?;
     let entries = walk(root, target);
     let mut sources = Vec::new();
     let mut errors = Vec::new();
@@ -27,6 +28,7 @@ pub(super) fn load_sources(
                 packages,
                 &include,
                 &exclude,
+                &test_sources,
                 &mut sources,
                 &mut errors,
             ),
@@ -69,6 +71,7 @@ fn load_entry(
     packages: &PackageRoots,
     include: &GlobSet,
     exclude: &GlobSet,
+    test_sources: &GlobSet,
     sources: &mut Vec<SourceUnit>,
     errors: &mut Vec<AnalysisError>,
 ) {
@@ -87,12 +90,22 @@ fn load_entry(
         return;
     }
     match fs::read_to_string(&absolute) {
-        Ok(text) => sources.push(SourceUnit::new(
-            absolute.clone(),
-            relative,
-            PackageRoot::edition_for(&absolute, packages),
-            text,
-        )),
+        Ok(text) => {
+            let kind = if test_sources.is_match(&normalized) {
+                SourceKind::Test
+            } else {
+                SourceKind::Production
+            };
+            sources.push(
+                SourceUnit::new(
+                    absolute.clone(),
+                    relative,
+                    PackageRoot::edition_for(&absolute, packages),
+                    text,
+                )
+                .with_kind(kind),
+            );
+        }
         Err(error) => errors.push(
             AnalysisError::new(format!("could not read Rust source: {error}")).at(relative, None),
         ),

@@ -9,6 +9,15 @@ pub enum Level {
     Deny,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleScope {
+    #[default]
+    All,
+    Production,
+    Test,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleClass {

@@ -42,6 +42,7 @@ fn fact(
     kind: TestCodeKind,
 ) -> TestCodeFact {
     let range = attribute.syntax().text_range();
+    let item_range = item.syntax().text_range();
     TestCodeFact {
         kind,
         name: item_name(item),
@@ -49,6 +50,11 @@ fn fact(
             &source.text,
             usize::from(range.start()),
             usize::from(range.end()),
+        ),
+        item_span: source.lines.span(
+            &source.text,
+            usize::from(item_range.start()),
+            usize::from(item_range.end()),
         ),
     }
 }

@@ -76,6 +76,7 @@ fn accepts_only_locations_from_loaded_workspace_sources() {
             edition: RustEdition::Edition2024,
             lines: Arc::new(LineIndex::new(&text)),
             text: Arc::from(text),
+            kind: policy_core::SourceKind::Production,
         }],
     };
     let location = RawLocation {

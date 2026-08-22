@@ -39,6 +39,26 @@ fn oversized_function(lines: usize) -> String {
     source
 }
 
+fn write_scoped_function_policy(workspace: &TestWorkspace, scope: &str) {
+    fs::write(
+        workspace.root().join("policy.toml"),
+        format!(
+            r#"version = 1
+
+[sources]
+include = ["**/*.rs"]
+exclude = []
+
+[rules."size/function-max-lines"]
+level = "deny"
+limit = 50
+scope = "{scope}"
+"#,
+        ),
+    )
+    .expect("scoped policy");
+}
+
 #[test]
 fn clean_workspace_passes_with_human_summary() {
     let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 50, 200);
@@ -75,6 +95,55 @@ fn function_limit_is_inclusive() {
         let output = command(&workspace).output().expect("run cargo-policy");
         assert!(output.status.success(), "{lines} lines should pass");
     }
+}
+
+#[test]
+fn production_scope_ignores_dedicated_and_attributed_tests() {
+    let attributed_test = format!("#[test]\n{}", oversized_function(51));
+    let workspace = TestWorkspace::new(&attributed_test, "deny", 50, 200);
+    fs::create_dir(workspace.root().join("tests")).expect("tests directory");
+    fs::write(
+        workspace.root().join("tests/large_tests.rs"),
+        oversized_function(51),
+    )
+    .expect("dedicated test source");
+    write_scoped_function_policy(&workspace, "production");
+
+    let output = command(&workspace).output().expect("run scoped policy");
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("policy check passed"));
+}
+
+#[test]
+fn test_scope_reports_only_test_code() {
+    let workspace = TestWorkspace::new(&oversized_function(51), "deny", 50, 200);
+    fs::create_dir(workspace.root().join("tests")).expect("tests directory");
+    fs::write(
+        workspace.root().join("tests/large_tests.rs"),
+        oversized_function(51),
+    )
+    .expect("dedicated test source");
+    write_scoped_function_policy(&workspace, "test");
+
+    let output = command(&workspace)
+        .args(["--format", "json"])
+        .output()
+        .expect("run scoped policy");
+    assert_eq!(output.status.code(), Some(1));
+    let document: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let diagnostics = document["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["path"], "tests/large_tests.rs");
+}
+
+#[test]
+fn rejects_unknown_rule_scopes() {
+    let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 50, 200);
+    write_scoped_function_policy(&workspace, "examples");
+
+    let output = command(&workspace).output().expect("run scoped policy");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid scope"));
 }
 
 #[test]

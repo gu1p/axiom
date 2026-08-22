@@ -84,14 +84,17 @@ version = 1
 [sources]
 include = ["**/*.rs"]
 exclude = []
+test = ["**/tests.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests/**/*.rs"]
 
 [rules."size/function-max-lines"]
 level = "deny"
 limit = 50
+scope = "production"
 
 [rules."size/file-max-lines"]
 level = "deny"
 limit = 200
+scope = "production"
 
 [rules."testing/separate-test-files"]
 level = "deny"
@@ -115,9 +118,20 @@ level = "warn"
 level = "warn"
 ```
 
-Levels are `allow`, `warn`, and `deny`. Omitted rules are disabled. Source globs are evaluated
-against forward-slash workspace-relative paths; normal ignore files, `.git`, Cargo's target
-directory, and directory symlinks are excluded from discovery.
+Levels are `allow`, `warn`, and `deny`. Omitted rules are disabled. Every rule also accepts a
+`scope` of `all` (the default), `production`, or `test`. A production-scoped rule ignores findings
+inside dedicated test files, test-attributed functions, and inline `#[cfg(test)]` items. This lets
+production functions keep a strict line budget without imposing the same budget on test setup:
+
+```toml
+[rules."size/function-max-lines"]
+level = "deny"
+limit = 50
+scope = "production"
+```
+
+Source globs are evaluated against forward-slash workspace-relative paths; normal ignore files,
+`.git`, Cargo's target directory, and directory symlinks are excluded from discovery.
 
 `testing/separate-test-files` rejects inline `#[cfg(test)]` implementations and test-attributed
 functions in production files. External test module declarations remain valid, so private unit
@@ -130,8 +144,8 @@ mod tests;
 ```
 
 By default, files under a `tests/` directory and files named `tests.rs`, `*_test.rs`, or
-`*_tests.rs` are dedicated test files. Override those conventions with
-`test_file_patterns = ["**/specs/**/*.rs"]` in the rule table.
+`*_tests.rs` are classified as test sources. Override those conventions for every scoped rule with
+the `[sources].test` glob list, for example `test = ["**/specs/**/*.rs"]`.
 
 ## Semantic analysis
 

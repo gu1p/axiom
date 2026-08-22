@@ -1,7 +1,7 @@
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use policy_core::{
-    CodebaseFacts, Diagnostic, Level, Rule, RuleClass, RuleFactory, RuleMetadata, TestCodeFact,
-    TestCodeKind,
+    CodebaseFacts, Diagnostic, Level, Rule, RuleClass, RuleFactory, RuleMetadata, SourceKind,
+    TestCodeFact, TestCodeKind,
 };
 use serde::Deserialize;
 use toml::Table;
@@ -67,6 +67,9 @@ impl Rule for SeparateTestFiles {
 
     fn evaluate(&self, facts: &CodebaseFacts, diagnostics: &mut Vec<Diagnostic>) {
         for file in &facts.files {
+            if file.source.kind == SourceKind::Test {
+                continue;
+            }
             let path = file.source.relative_path.as_str().replace('\\', "/");
             if self.test_files.is_match(&path) {
                 continue;

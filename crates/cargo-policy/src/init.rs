@@ -9,14 +9,17 @@ const BASE_CONFIG: &str = r#"version = 1
 [sources]
 include = ["**/*.rs"]
 exclude = []
+test = ["**/tests.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests/**/*.rs"]
 
 [rules."size/function-max-lines"]
 level = "deny"
 limit = 50
+scope = "production"
 
 [rules."size/file-max-lines"]
 level = "deny"
 limit = 200
+scope = "production"
 
 [rules."testing/separate-test-files"]
 level = "deny"

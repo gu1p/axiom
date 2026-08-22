@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 
-use crate::{LineIndex, SourceSpan};
+use crate::{LineIndex, RuleScope, SourceSpan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RustEdition {
@@ -19,6 +19,7 @@ pub struct SourceUnit {
     pub edition: RustEdition,
     pub text: Arc<str>,
     pub lines: Arc<LineIndex>,
+    pub kind: SourceKind,
 }
 
 impl SourceUnit {
@@ -36,8 +37,21 @@ impl SourceUnit {
             edition,
             text,
             lines,
+            kind: SourceKind::Production,
         }
     }
+
+    #[must_use]
+    pub fn with_kind(mut self, kind: SourceKind) -> Self {
+        self.kind = kind;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    Production,
+    Test,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +80,7 @@ pub struct TestCodeFact {
     pub kind: TestCodeKind,
     pub name: Option<String>,
     pub span: SourceSpan,
+    pub item_span: SourceSpan,
 }
 
 #[derive(Debug, Clone)]
@@ -99,4 +114,33 @@ pub struct SemanticFindingFact {
 pub struct CodebaseFacts {
     pub files: Vec<SourceFileFact>,
     pub semantic_findings: Vec<SemanticFindingFact>,
+}
+
+impl CodebaseFacts {
+    pub(super) fn matches_scope(
+        &self,
+        path: &camino::Utf8Path,
+        offset: u32,
+        scope: RuleScope,
+    ) -> bool {
+        if scope == RuleScope::All {
+            return true;
+        }
+        let is_test = self.files.iter().any(|file| {
+            file.source.relative_path == path
+                && (file.source.kind == SourceKind::Test
+                    || file
+                        .test_code
+                        .iter()
+                        .any(|fact| contains(fact.item_span, offset)))
+        });
+        matches!(
+            (scope, is_test),
+            (RuleScope::Production, false) | (RuleScope::Test, true)
+        )
+    }
+}
+
+fn contains(span: SourceSpan, offset: u32) -> bool {
+    span.byte_start <= offset && offset < span.byte_end
 }
