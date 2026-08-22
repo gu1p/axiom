@@ -136,6 +136,7 @@ fn cargo_rustc(workspace_root: &Path, manifest_path: &Path) -> Result<OsString> 
     let executable = env::current_exe().context("locate Hawk executable for Cargo rustc probe")?;
     let mut command = Command::new("cargo");
     clear_protocol_environment(&mut command);
+    disable_outer_rustc_wrapper(&mut command);
     command
         .current_dir(workspace_root)
         .arg("check")
@@ -352,5 +353,31 @@ pub(crate) fn validate_driver_protocol(driver: &Path, toolchain: &RustToolchain)
 pub(crate) fn clear_protocol_environment(command: &mut Command) {
     for variable in protocol::ENVIRONMENT_VARIABLES {
         command.env_remove(variable);
+    }
+}
+
+pub(crate) fn disable_outer_rustc_wrapper(command: &mut Command) {
+    // Cargo composes RUSTC_WRAPPER outside RUSTC_WORKSPACE_WRAPPER. Some macOS
+    // wrappers are hardened executables, so dyld strips the library path that
+    // the compiler-coupled Axiom driver needs before launching it.
+    command.env("RUSTC_WRAPPER", "");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{ffi::OsStr, process::Command};
+
+    use super::disable_outer_rustc_wrapper;
+
+    #[test]
+    fn semantic_cargo_disables_outer_compiler_wrappers() {
+        let mut command = Command::new("cargo");
+        command.env("RUSTC_WRAPPER", "kache");
+        disable_outer_rustc_wrapper(&mut command);
+
+        let value = command
+            .get_envs()
+            .find_map(|(key, value)| (key == "RUSTC_WRAPPER").then_some(value));
+        assert_eq!(value, Some(Some(OsStr::new(""))));
     }
 }

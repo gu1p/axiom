@@ -183,10 +183,9 @@ reason = "kept until the legacy consumer is migrated"
 ```
 
 Semantic analysis uses the compiler-coupled Rust 1.98.0 driver included with Axiom. On first use,
-Axiom installs the matching minimal toolchain through rustup if it is missing. Set
-`AXIOM_OFFLINE=1` to forbid network access; Axiom then reports the exact provisioning command.
-Building Axiom itself also requires the `rustc-dev` component, which its `rust-toolchain.toml`
-selects automatically.
+Axiom installs the matching minimal toolchain and `rustc-dev` component through rustup if either is
+missing. Set `AXIOM_OFFLINE=1` to forbid network access; Axiom then reports the exact provisioning
+command. Building Axiom itself selects the same component through `rust-toolchain.toml`.
 
 The public Linux Axiom executable remains statically linked and works on musl. Semantic rules
 currently require glibc because the private driver dynamically loads Rust compiler libraries; on a

@@ -26,7 +26,8 @@ use crate::graph::{
 };
 use crate::protocol;
 use crate::toolchain::{
-    RustToolchain, clear_protocol_environment, driver_executable, validate_driver_protocol,
+    RustToolchain, clear_protocol_environment, disable_outer_rustc_wrapper, driver_executable,
+    validate_driver_protocol,
 };
 
 #[derive(Debug, Parser)]
@@ -1357,6 +1358,7 @@ impl InstrumentedCargo<'_> {
         } = invocation.specification();
         let mut command = Command::new("cargo");
         clear_protocol_environment(&mut command);
+        disable_outer_rustc_wrapper(&mut command);
         command
             .current_dir(self.workspace_root)
             .arg(subcommand)
