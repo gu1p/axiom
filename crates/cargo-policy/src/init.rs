@@ -11,6 +11,12 @@ include = ["**/*.rs"]
 exclude = []
 test = ["**/tests.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests/**/*.rs"]
 
+[tools.clippy]
+enabled = true
+targets = "all"
+features = "default"
+warnings = "deny"
+
 [rules."size/function-max-lines"]
 level = "deny"
 limit = 50

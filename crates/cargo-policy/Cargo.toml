@@ -15,6 +15,7 @@ path = "src/bin/cargo-policy.rs"
 
 [dependencies]
 camino.workspace = true
+cargo_metadata.workspace = true
 clap.workspace = true
 policy-cargo = { path = "../policy-cargo" }
 policy-core = { path = "../policy-core" }

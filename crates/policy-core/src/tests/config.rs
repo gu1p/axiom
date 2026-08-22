@@ -45,3 +45,47 @@ reason = "shipped binary"
     let semantic = config.semantic.expect("semantic table");
     assert!(semantic.contains_key("production"));
 }
+
+#[test]
+fn clippy_is_enabled_with_strict_workspace_defaults() {
+    let config = load("version = 1").expect("default configuration");
+
+    assert!(config.tools.clippy.enabled);
+    assert!(config.tools.clippy.checks_all_targets());
+    assert!(!config.tools.clippy.checks_all_features());
+    assert!(!config.tools.clippy.no_default_features);
+    assert!(config.tools.clippy.selected_features().is_none());
+    assert!(config.tools.clippy.denies_warnings());
+}
+
+#[test]
+fn parses_clippy_coverage_and_rejects_conflicting_features() {
+    let config = load(
+        r#"version = 1
+
+[tools.clippy]
+enabled = true
+targets = "default"
+features = ["server", "postgres"]
+warnings = "warn"
+"#,
+    )
+    .expect("custom Clippy configuration");
+    assert!(!config.tools.clippy.checks_all_targets());
+    assert_eq!(
+        config.tools.clippy.selected_features(),
+        Some(["server".to_owned(), "postgres".to_owned()].as_slice())
+    );
+    assert!(!config.tools.clippy.denies_warnings());
+
+    let error = load(
+        r#"version = 1
+[tools.clippy]
+features = "all"
+no-default-features = true
+"#,
+    )
+    .expect_err("conflicting feature selection")
+    .to_string();
+    assert!(error.contains("cannot combine features = \"all\""));
+}

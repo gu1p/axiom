@@ -3,8 +3,9 @@
 [![CI](https://github.com/gu1p/axiom/actions/workflows/ci.yml/badge.svg)](https://github.com/gu1p/axiom/actions/workflows/ci.yml)
 [![Release](https://github.com/gu1p/axiom/actions/workflows/release.yml/badge.svg)](https://github.com/gu1p/axiom/actions/workflows/release.yml)
 
-Axiom is an executable-policy platform for Rust workspaces. It combines source facts, rustc/HIR
-semantics, workspace reachability, and small declarative policies behind one compiler-like command.
+Axiom is an executable-policy platform for Rust workspaces. It combines Clippy, source facts,
+rustc/HIR semantics, workspace reachability, and small declarative policies behind one
+compiler-like command.
 
 ## Usage
 
@@ -55,8 +56,9 @@ axiom check --format json
 axiom check --color never
 ```
 
-Exit code `0` means the check completed without deny-level findings, `1` means policies were
-violated, and `2` means configuration, discovery, I/O, UTF-8, or parsing prevented a complete check.
+Exit code `0` means the check completed without deny-level findings, `1` means a native policy or
+wrapped tool failed, and `2` means configuration, discovery, tool availability, I/O, UTF-8, or
+parsing prevented a complete check.
 
 ## Releases
 
@@ -85,6 +87,12 @@ version = 1
 include = ["**/*.rs"]
 exclude = []
 test = ["**/tests.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests/**/*.rs"]
+
+[tools.clippy]
+enabled = true
+targets = "all"
+features = "default"
+warnings = "deny"
 
 [rules."size/function-max-lines"]
 level = "deny"
@@ -132,6 +140,38 @@ scope = "production"
 
 Source globs are evaluated against forward-slash workspace-relative paths; normal ignore files,
 `.git`, Cargo's target directory, and directory symlinks are excluded from discovery.
+
+## Clippy
+
+`axiom check` runs Clippy for the complete workspace before producing its combined result. Clippy
+is enabled even when `[tools.clippy]` is omitted and uses these defaults:
+
+```toml
+[tools.clippy]
+enabled = true
+targets = "all"
+features = "default"
+no-default-features = false
+warnings = "deny"
+```
+
+The wrapped command uses `cargo clippy --workspace --locked --no-deps --keep-going`, adds
+`--all-targets` by default, and denies warnings. Configure individual lint levels in the
+workspace's `Cargo.toml` using Cargo's standard `[workspace.lints.clippy]` table. Axiom owns only
+execution coverage and whether warnings block the check.
+
+For a workspace whose valid build needs selected features:
+
+```toml
+[tools.clippy]
+targets = "default"
+features = ["server", "postgres"]
+```
+
+`targets` accepts `"all"` or `"default"`. `features` accepts `"default"`, `"all"`, or a list of
+feature names; combine a feature list with `no-default-features = true` when needed. `warnings`
+accepts `"deny"` or `"warn"`. Set `enabled = false` only when another required system owns Clippy
+execution. If the component is missing, install it with `rustup component add clippy`.
 
 `testing/separate-test-files` rejects inline `#[cfg(test)]` implementations and test-attributed
 functions in production files. External test module declarations remain valid, so private unit
@@ -202,7 +242,9 @@ musl-only host, disable semantic rules or run Axiom in a glibc environment.
 - Macro invocations are not expanded.
 
 JSON output is a deterministic document with `schema_version = 1`, an outcome, diagnostics, and a
-summary. Span byte offsets are zero-based; line and Unicode-scalar columns are one-based.
+summary. Native diagnostics use `kind = "policy"`; wrapped Clippy diagnostics use `kind = "tool"`
+and `tool = "clippy"`. Span byte offsets are zero-based; line and Unicode-scalar columns are
+one-based.
 
 ## Architecture
 
@@ -213,7 +255,7 @@ The workspace deliberately separates responsibilities:
 - `policy-syntax` contributes lossless syntax facts.
 - `policy-semantic` owns the absorbed workspace graph, HIR collector, and private compiler driver.
 - `policy-rules` converts configured policies into diagnostics.
-- `cargo-policy` owns CLI commands and output renderers.
+- `cargo-policy` owns CLI commands, wrapped tools, and output renderers.
 
 Backends add facts through `FactProvider`; policy families register `RuleFactory` implementations.
 Neither requires another public command or analysis platform.

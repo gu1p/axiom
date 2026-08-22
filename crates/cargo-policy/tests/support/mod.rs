@@ -30,6 +30,9 @@ impl TestWorkspace {
 include = ["**/*.rs"]
 exclude = []
 
+[tools.clippy]
+enabled = false
+
 [rules."size/function-max-lines"]
 level = "{function_level}"
 limit = {function_limit}

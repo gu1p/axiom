@@ -3,6 +3,7 @@ mod check;
 mod init;
 mod report;
 mod semantic;
+mod tools;
 
 use std::{ffi::OsString, process::ExitCode};
 

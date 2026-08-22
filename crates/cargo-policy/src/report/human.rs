@@ -3,9 +3,26 @@ use std::io::{self, IsTerminal};
 use policy_core::{AnalysisError, AnalysisInput, Diagnostic, Level, SourceSpan, SourceUnit};
 
 use crate::args::ColorChoice;
+use crate::tools::{ToolDiagnostic, ToolReport};
 
-pub fn policies(diagnostics: &[Diagnostic], input: &AnalysisInput, choice: ColorChoice) {
+pub fn check(
+    diagnostics: &[Diagnostic],
+    tools: &[ToolReport],
+    input: &AnalysisInput,
+    choice: ColorChoice,
+) {
     let color = color_enabled(choice);
+    policy_diagnostics(diagnostics, input, color);
+    for report in tools {
+        for diagnostic in &report.diagnostics {
+            tool_diagnostic(diagnostic, input, color);
+        }
+    }
+    let (denied, warned) = diagnostic_counts(diagnostics, tools);
+    summary(input, tools, denied, warned);
+}
+
+fn policy_diagnostics(diagnostics: &[Diagnostic], input: &AnalysisInput, color: bool) {
     for diagnostic in diagnostics {
         let severity = if diagnostic.level == Level::Warn {
             "warning"
@@ -20,19 +37,77 @@ pub fn policies(diagnostics: &[Diagnostic], input: &AnalysisInput, choice: Color
         }
         eprintln!("  = help: {}\n", diagnostic.help);
     }
+}
+
+fn diagnostic_counts(diagnostics: &[Diagnostic], tools: &[ToolReport]) -> (usize, usize) {
     let denied = diagnostics
         .iter()
         .filter(|item| item.level == Level::Deny)
-        .count();
+        .count()
+        + tools
+            .iter()
+            .flat_map(|report| &report.diagnostics)
+            .filter(|item| item.level == Level::Deny)
+            .count();
     let warned = diagnostics
         .iter()
         .filter(|item| item.level == Level::Warn)
-        .count();
-    if diagnostics.is_empty() {
-        eprintln!("policy check passed ({} Rust files)", input.sources.len());
+        .count()
+        + tools
+            .iter()
+            .flat_map(|report| &report.diagnostics)
+            .filter(|item| item.level == Level::Warn)
+            .count();
+    (denied, warned)
+}
+
+fn summary(input: &AnalysisInput, tools: &[ToolReport], denied: usize, warned: usize) {
+    if denied == 0 && warned == 0 {
+        let tools = tools
+            .iter()
+            .map(|report| report.name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if tools.is_empty() {
+            eprintln!("axiom check passed ({} Rust files)", input.sources.len());
+        } else {
+            eprintln!(
+                "axiom check passed ({} Rust files; {tools} passed)",
+                input.sources.len()
+            );
+        }
     } else {
-        eprintln!("policy check found {denied} error(s) and {warned} warning(s)");
+        eprintln!("axiom check found {denied} error(s) and {warned} warning(s)");
     }
+}
+
+fn tool_diagnostic(diagnostic: &ToolDiagnostic, input: &AnalysisInput, color: bool) {
+    if let Some(rendered) = &diagnostic.rendered {
+        eprint!("{rendered}");
+        if !rendered.ends_with('\n') {
+            eprintln!();
+        }
+        return;
+    }
+    let severity = if diagnostic.level == Level::Warn {
+        "warning"
+    } else {
+        "error"
+    };
+    let heading = paint(severity, severity_color(severity), color);
+    eprintln!(
+        "{heading}[{}::{}]: {}",
+        diagnostic.tool, diagnostic.rule_id, diagnostic.message
+    );
+    if let (Some(path), Some(span)) = (&diagnostic.path, diagnostic.span) {
+        location(path, span, input, color);
+    } else if let Some(path) = &diagnostic.path {
+        eprintln!(" --> {path}");
+    }
+    if let Some(help) = &diagnostic.help {
+        eprintln!("  = help: {help}");
+    }
+    eprintln!();
 }
 
 pub fn operational(errors: &[AnalysisError], input: Option<&AnalysisInput>, choice: ColorChoice) {
@@ -47,7 +122,7 @@ pub fn operational(errors: &[AnalysisError], input: Option<&AnalysisInput>, choi
         }
         eprintln!();
     }
-    eprintln!("policy check could not complete");
+    eprintln!("axiom check could not complete");
 }
 
 fn location(path: &camino::Utf8Path, span: SourceSpan, input: &AnalysisInput, color: bool) {

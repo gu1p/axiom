@@ -129,6 +129,7 @@ name = "cargo-policy"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "cargo_metadata",
  "clap",
  "policy-cargo",
  "policy-core",

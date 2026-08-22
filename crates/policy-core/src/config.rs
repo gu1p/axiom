@@ -4,6 +4,13 @@ use camino::Utf8Path;
 use serde::Deserialize;
 use toml::Table;
 
+mod tools;
+
+pub use tools::{
+    ClippyConfig, ClippyFeatureMode, ClippyFeatureSelection, ClippyTargetCoverage,
+    ClippyWarningPolicy, ToolConfig,
+};
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
@@ -12,6 +19,8 @@ pub struct PolicyConfig {
     pub sources: SourceConfig,
     #[serde(default)]
     pub semantic: Option<Table>,
+    #[serde(default)]
+    pub tools: ToolConfig,
     #[serde(default)]
     pub rules: BTreeMap<String, Table>,
 }
@@ -63,6 +72,9 @@ impl PolicyConfig {
         if self.sources.include.is_empty() {
             return Err(ConfigError::NoIncludes);
         }
+        if self.tools.clippy.checks_all_features() && self.tools.clippy.no_default_features {
+            return Err(ConfigError::ConflictingClippyFeatureMode);
+        }
         Ok(())
     }
 }
@@ -102,6 +114,8 @@ pub enum ConfigError {
     UnsupportedVersion(u32),
     #[error("sources.include must contain at least one glob")]
     NoIncludes,
+    #[error("tools.clippy cannot combine features = \"all\" with no-default-features = true")]
+    ConflictingClippyFeatureMode,
 }
 
 #[cfg(test)]

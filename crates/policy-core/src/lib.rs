@@ -5,7 +5,10 @@ mod facts;
 mod lines;
 mod registry;
 
-pub use config::{PolicyConfig, SourceConfig};
+pub use config::{
+    ClippyConfig, ClippyFeatureMode, ClippyFeatureSelection, ClippyTargetCoverage,
+    ClippyWarningPolicy, PolicyConfig, SourceConfig, ToolConfig,
+};
 pub use diagnostic::{Diagnostic, Level, Position, RuleClass, RuleMetadata, RuleScope, SourceSpan};
 pub use engine::{Engine, FactProvider, Rule};
 pub use facts::{

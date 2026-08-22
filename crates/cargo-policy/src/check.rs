@@ -1,5 +1,7 @@
 use policy_cargo::Workspace;
-use policy_core::{AnalysisError, Engine, FactProvider, Level, PolicyConfig};
+use policy_core::{
+    AnalysisError, AnalysisInput, Diagnostic, Engine, FactProvider, Level, PolicyConfig,
+};
 use policy_syntax::SyntaxFactProvider;
 
 use crate::{
@@ -24,14 +26,37 @@ pub fn run(options: &CheckOptions) -> u8 {
             return operational(options, &[AnalysisError::new(error.to_string())], None);
         }
     };
-    let rules = match policy_rules::registry().build(&config.rules) {
-        Ok(rules) => rules,
-        Err(error) => return operational(options, &[AnalysisError::new(error)], None),
-    };
     let input = match workspace.load(&config.sources) {
         Ok(input) => input,
         Err(errors) => return operational(options, &errors, None),
     };
+    let diagnostics = match analyze_policies(&config, &input) {
+        Ok(diagnostics) => diagnostics,
+        Err(errors) => return operational(options, &errors, Some(&input)),
+    };
+    let tool_reports = match crate::tools::run(&input, &config.tools) {
+        Ok(reports) => reports,
+        Err(error) => return operational(options, &[error], Some(&input)),
+    };
+    report::check(options, &input, &diagnostics, &tool_reports);
+    u8::from(
+        diagnostics.iter().any(|item| item.level == Level::Deny)
+            || tool_reports.iter().any(|report| {
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|item| item.level == Level::Deny)
+            }),
+    )
+}
+
+fn analyze_policies(
+    config: &PolicyConfig,
+    input: &AnalysisInput,
+) -> Result<Vec<Diagnostic>, Vec<AnalysisError>> {
+    let rules = policy_rules::registry()
+        .build(&config.rules)
+        .map_err(|error| vec![AnalysisError::new(error)])?;
     let collect_hir = rules
         .iter()
         .any(|rule| rule.level() != Level::Allow && policy_rules::is_hir_rule(rule.metadata().id));
@@ -47,12 +72,7 @@ pub fn run(options: &CheckOptions) -> u8 {
         )));
     }
     let engine = Engine::new(providers, rules);
-    let diagnostics = match engine.run(&input) {
-        Ok(diagnostics) => diagnostics,
-        Err(errors) => return operational(options, &errors, Some(&input)),
-    };
-    report::policies(options, &input, &diagnostics);
-    u8::from(diagnostics.iter().any(|item| item.level == Level::Deny))
+    engine.run(input)
 }
 
 fn operational(

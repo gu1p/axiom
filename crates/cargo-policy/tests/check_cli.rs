@@ -12,7 +12,8 @@ fn command(workspace: &TestWorkspace) -> Command {
         .arg("--manifest-path")
         .arg(workspace.manifest())
         .arg("--color")
-        .arg("never");
+        .arg("never")
+        .env("CARGO_TARGET_DIR", workspace.root().join("target"));
     command
 }
 
@@ -49,6 +50,9 @@ fn write_scoped_function_policy(workspace: &TestWorkspace, scope: &str) {
 include = ["**/*.rs"]
 exclude = []
 
+[tools.clippy]
+enabled = false
+
 [rules."size/function-max-lines"]
 level = "deny"
 limit = 50
@@ -65,7 +69,7 @@ fn clean_workspace_passes_with_human_summary() {
     let output = command(&workspace).output().expect("run cargo-policy");
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("policy check passed (1 Rust files)"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("axiom check passed (1 Rust files)"));
 }
 
 #[test]
@@ -111,7 +115,7 @@ fn production_scope_ignores_dedicated_and_attributed_tests() {
 
     let output = command(&workspace).output().expect("run scoped policy");
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("policy check passed"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("axiom check passed"));
 }
 
 #[test]
@@ -199,7 +203,7 @@ fn source_exclusions_are_workspace_relative() {
     .expect("excluded policy");
     let output = command(&workspace).output().expect("run cargo-policy");
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("policy check passed (0 Rust files)"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("axiom check passed (0 Rust files"));
 }
 
 #[test]
@@ -217,6 +221,9 @@ fn private_dead_code_uses_rustc_and_respects_source_allows() {
 [sources]
 include = ["**/*.rs"]
 exclude = []
+
+[tools.clippy]
+enabled = false
 
 [rules."dead-code/private"]
 level = "warn"
@@ -238,4 +245,66 @@ level = "warn"
             .as_str()
             .is_some_and(|message| message.contains("unused_private"))
     );
+}
+
+fn write_clippy_policy(workspace: &TestWorkspace, enabled: bool, deny_warnings: bool) {
+    fs::write(
+        workspace.root().join("policy.toml"),
+        format!(
+            r#"version = 1
+
+[sources]
+include = ["**/*.rs"]
+exclude = []
+
+[tools.clippy]
+enabled = {enabled}
+targets = "all"
+warnings = "{}"
+"#,
+            if deny_warnings { "deny" } else { "warn" },
+        ),
+    )
+    .expect("Clippy policy");
+}
+
+#[test]
+fn clippy_denied_warning_is_a_versioned_tool_diagnostic() {
+    let workspace = TestWorkspace::new("pub fn answer() -> u8 { return 42; }\n", "deny", 50, 200);
+    write_clippy_policy(&workspace, true, true);
+
+    let output = command(&workspace)
+        .args(["--format", "json"])
+        .output()
+        .expect("run Clippy through Axiom");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let document: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert_eq!(document["outcome"], "violations");
+    assert_eq!(document["diagnostics"][0]["kind"], "tool");
+    assert_eq!(document["diagnostics"][0]["tool"], "clippy");
+    assert_eq!(
+        document["diagnostics"][0]["rule_id"],
+        "clippy::needless_return"
+    );
+}
+
+#[test]
+fn clippy_warning_can_be_non_blocking_or_disabled() {
+    let workspace = TestWorkspace::new("pub fn answer() -> u8 { return 42; }\n", "deny", 50, 200);
+    write_clippy_policy(&workspace, true, false);
+
+    let warning = command(&workspace)
+        .args(["--format", "json"])
+        .output()
+        .expect("run non-blocking Clippy");
+    assert!(warning.status.success());
+    let document: Value = serde_json::from_slice(&warning.stdout).expect("valid JSON");
+    assert_eq!(document["outcome"], "passed");
+    assert_eq!(document["summary"]["warnings"], 1);
+
+    write_clippy_policy(&workspace, false, true);
+    let disabled = command(&workspace).output().expect("run without Clippy");
+    assert!(disabled.status.success());
+    assert!(String::from_utf8_lossy(&disabled.stderr).contains("axiom check passed"));
 }

@@ -25,6 +25,9 @@ fn enable_rule(workspace: &TestWorkspace) {
 include = ["**/*.rs"]
 exclude = []
 
+[tools.clippy]
+enabled = false
+
 [rules."testing/separate-test-files"]
 level = "deny"
 "#,
@@ -65,7 +68,7 @@ fn dedicated_test_files_and_external_test_modules_are_allowed() {
     enable_rule(&workspace);
     let output = command(&workspace).output().expect("run cargo-policy");
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("policy check passed (2 Rust files)"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("axiom check passed (2 Rust files)"));
 }
 
 #[test]
