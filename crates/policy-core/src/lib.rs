@@ -10,6 +10,7 @@ pub use diagnostic::{Diagnostic, Level, Position, RuleClass, RuleMetadata, Sourc
 pub use engine::{Engine, FactProvider, Rule};
 pub use facts::{
     AnalysisInput, CodebaseFacts, FunctionFact, RustEdition, SourceFileFact, SourceUnit,
+    TestCodeFact, TestCodeKind,
 };
 pub use lines::LineIndex;
 pub use registry::{RuleFactory, RuleRegistry};

@@ -47,6 +47,6 @@ pub struct Diagnostic {
     pub help: String,
     pub path: Utf8PathBuf,
     pub span: SourceSpan,
-    pub observed: u32,
-    pub limit: u32,
+    pub observed: Option<u32>,
+    pub limit: Option<u32>,
 }

@@ -26,6 +26,7 @@ fn init_creates_the_default_policy_and_refuses_to_overwrite_it() {
         std::fs::read_to_string(workspace.root().join("policy.toml")).expect("initialized policy");
     assert!(config.contains("limit = 50"));
     assert!(config.contains("limit = 200"));
+    assert!(config.contains("testing/separate-test-files"));
 
     let second = init_command(&workspace)
         .output()

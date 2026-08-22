@@ -93,11 +93,28 @@ limit = 50
 [rules."size/file-max-lines"]
 level = "deny"
 limit = 200
+
+[rules."testing/separate-test-files"]
+level = "deny"
 ```
 
 Levels are `allow`, `warn`, and `deny`. Omitted rules are disabled. Source globs are evaluated
 against forward-slash workspace-relative paths; normal ignore files, `.git`, Cargo's target
 directory, and directory symlinks are excluded from discovery.
+
+`testing/separate-test-files` rejects inline `#[cfg(test)]` implementations and test-attributed
+functions in production files. External test module declarations remain valid, so private unit
+tests can be placed in separate files:
+
+```rust
+#[cfg(test)]
+#[path = "tests/order.rs"]
+mod tests;
+```
+
+By default, files under a `tests/` directory and files named `tests.rs`, `*_test.rs`, or
+`*_tests.rs` are dedicated test files. Override those conventions with
+`test_file_patterns = ["**/specs/**/*.rs"]` in the rule table.
 
 ## Physical-line definition
 

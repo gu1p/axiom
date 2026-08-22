@@ -15,7 +15,9 @@ pub fn policies(diagnostics: &[Diagnostic], input: &AnalysisInput, choice: Color
         let heading = paint(severity, severity_color(severity), color);
         eprintln!("{heading}[{}]: {}", diagnostic.rule_id, diagnostic.message);
         location(&diagnostic.path, diagnostic.span, input, color);
-        eprintln!("  = limit: {} physical lines", diagnostic.limit);
+        if let Some(limit) = diagnostic.limit {
+            eprintln!("  = limit: {limit} physical lines");
+        }
         eprintln!("  = help: {}\n", diagnostic.help);
     }
     let denied = diagnostics

@@ -17,6 +17,9 @@ limit = 50
 [rules."size/file-max-lines"]
 level = "deny"
 limit = 200
+
+[rules."testing/separate-test-files"]
+level = "deny"
 "#;
 
 pub fn run(options: &InitOptions) -> u8 {

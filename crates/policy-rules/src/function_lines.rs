@@ -48,8 +48,8 @@ impl Rule for FunctionMaxLines {
                     help: "extract cohesive work into smaller functions".to_owned(),
                     path: file.source.relative_path.clone(),
                     span: function.name_span,
-                    observed: function.line_count,
-                    limit: self.0.limit,
+                    observed: Some(function.line_count),
+                    limit: Some(self.0.limit),
                 });
             }
         }

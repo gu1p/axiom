@@ -54,11 +54,26 @@ pub struct FunctionFact {
     pub line_count: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestCodeKind {
+    TestFunction,
+    InlineTestModule,
+    TestOnlyItem,
+}
+
+#[derive(Debug, Clone)]
+pub struct TestCodeFact {
+    pub kind: TestCodeKind,
+    pub name: Option<String>,
+    pub span: SourceSpan,
+}
+
 #[derive(Debug, Clone)]
 pub struct SourceFileFact {
     pub source: SourceUnit,
     pub line_count: u32,
     pub functions: Vec<FunctionFact>,
+    pub test_code: Vec<TestCodeFact>,
 }
 
 #[derive(Debug, Default)]

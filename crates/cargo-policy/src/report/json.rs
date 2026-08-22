@@ -75,8 +75,8 @@ impl From<&Diagnostic> for JsonDiagnostic {
             help: Some(value.help.clone()),
             path: Some(value.path.clone()),
             span: Some(value.span),
-            observed: Some(value.observed),
-            limit: Some(value.limit),
+            observed: value.observed,
+            limit: value.limit,
         }
     }
 }

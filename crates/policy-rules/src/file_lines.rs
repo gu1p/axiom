@@ -45,8 +45,8 @@ impl Rule for FileMaxLines {
                 help: "split the file into focused modules".to_owned(),
                 path: file.source.relative_path.clone(),
                 span: file.source.lines.span(&file.source.text, 0, end),
-                observed: file.line_count,
-                limit: self.0.limit,
+                observed: Some(file.line_count),
+                limit: Some(self.0.limit),
             });
         }
     }
