@@ -1,5 +1,5 @@
 use policy_cargo::Workspace;
-use policy_core::{AnalysisError, Engine, Level, PolicyConfig};
+use policy_core::{AnalysisError, Engine, FactProvider, Level, PolicyConfig};
 use policy_syntax::SyntaxFactProvider;
 
 use crate::{
@@ -32,7 +32,21 @@ pub fn run(options: &CheckOptions) -> u8 {
         Ok(input) => input,
         Err(errors) => return operational(options, &errors, None),
     };
-    let engine = Engine::new(vec![Box::new(SyntaxFactProvider)], rules);
+    let collect_hir = rules
+        .iter()
+        .any(|rule| rule.level() != Level::Allow && policy_rules::is_hir_rule(rule.metadata().id));
+    let collect_private_dead_code = rules.iter().any(|rule| {
+        rule.level() != Level::Allow && rule.metadata().id == policy_rules::PRIVATE_DEAD_CODE
+    });
+    let mut providers: Vec<Box<dyn FactProvider>> = vec![Box::new(SyntaxFactProvider)];
+    if collect_hir || collect_private_dead_code {
+        providers.push(Box::new(crate::semantic::SemanticFactProvider::new(
+            config.semantic.clone(),
+            collect_hir,
+            collect_private_dead_code,
+        )));
+    }
+    let engine = Engine::new(providers, rules);
     let diagnostics = match engine.run(&input) {
         Ok(diagnostics) => diagnostics,
         Err(errors) => return operational(options, &errors, Some(&input)),

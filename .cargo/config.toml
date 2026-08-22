@@ -1,0 +1,3 @@
+[env]
+# The internal semantic driver is the only crate allowed to use rustc_private.
+RUSTC_BOOTSTRAP = "axiom_hir_driver"

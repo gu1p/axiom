@@ -9,8 +9,8 @@ pub use config::{PolicyConfig, SourceConfig};
 pub use diagnostic::{Diagnostic, Level, Position, RuleClass, RuleMetadata, SourceSpan};
 pub use engine::{Engine, FactProvider, Rule};
 pub use facts::{
-    AnalysisInput, CodebaseFacts, FunctionFact, RustEdition, SourceFileFact, SourceUnit,
-    TestCodeFact, TestCodeKind,
+    AnalysisInput, CodebaseFacts, FunctionFact, RustEdition, SemanticFindingFact,
+    SemanticFindingKind, SourceFileFact, SourceUnit, TestCodeFact, TestCodeKind,
 };
 pub use lines::LineIndex;
 pub use registry::{RuleFactory, RuleRegistry};

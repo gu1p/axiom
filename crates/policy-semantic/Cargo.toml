@@ -1,0 +1,72 @@
+[package]
+name = "policy-semantic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+description = "Axiom's workspace-aware semantic Rust analysis backend"
+
+[lib]
+name = "policy_semantic"
+path = "src/lib.rs"
+doc = false
+doctest = false
+
+[[bin]]
+name = "axiom-hir-driver"
+path = "src/bin/axiom-hir-driver.rs"
+required-features = ["driver"]
+
+[features]
+default = ["frontend", "driver"]
+frontend = [
+    "dep:anstream",
+    "dep:anstyle",
+    "dep:cargo-platform",
+    "dep:cargo_metadata",
+    "dep:clap",
+    "dep:toml",
+]
+driver = []
+
+[dependencies]
+anstream = { workspace = true, optional = true }
+anstyle = { workspace = true, optional = true }
+anyhow.workspace = true
+cargo-platform = { workspace = true, optional = true }
+cargo_metadata = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+toml = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints.rust]
+unsafe_code = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -2 }
+char_lit_as_u8 = "allow"
+collapsible_else_if = "allow"
+collapsible_if = "allow"
+implicit_hasher = "allow"
+map_unwrap_or = "allow"
+match_same_arms = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+similar_names = "allow"
+single_match_else = "allow"
+struct_excessive_bools = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+used_underscore_binding = "allow"

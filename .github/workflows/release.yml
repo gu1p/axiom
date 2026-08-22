@@ -106,13 +106,17 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-        run: cargo build --release --locked --target "${{ matrix.target }}" --bin axiom
+        run: |
+          cargo build --release --locked --target "${{ matrix.target }}" --bin axiom
+          cargo build --release --locked -p policy-semantic --bin axiom-hir-driver
       - name: Verify version and linkage
         shell: bash
         run: |
           set -euo pipefail
           binary="target/${{ matrix.target }}/release/axiom"
+          driver="target/release/axiom-hir-driver"
           test "$("$binary" --version)" = "axiom $AXIOM_VERSION"
+          "$driver" --axiom-hir-protocol-version >/dev/null
           if [ "${{ matrix.linkage }}" = "static" ]; then
             if readelf -l "$binary" | grep -q 'Requesting program interpreter'; then
               echo "Linux release unexpectedly has a dynamic interpreter" >&2
@@ -133,7 +137,11 @@ jobs:
           set -euo pipefail
           mkdir -p "dist/$ARCHIVE_NAME"
           cp "target/${{ matrix.target }}/release/axiom" "dist/$ARCHIVE_NAME/axiom"
+          cp "target/release/axiom-hir-driver" "dist/$ARCHIVE_NAME/axiom-hir-driver"
           cp README.md "dist/$ARCHIVE_NAME/README.md"
+          cp THIRD_PARTY_NOTICES.md "dist/$ARCHIVE_NAME/"
+          cp third-party/hawk/LICENSE-APACHE "dist/$ARCHIVE_NAME/HAWK-LICENSE-APACHE"
+          cp third-party/hawk/LICENSE-MIT "dist/$ARCHIVE_NAME/HAWK-LICENSE-MIT"
           tar -C dist -czf "dist/$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
           if command -v sha256sum >/dev/null 2>&1; then
             (cd dist && sha256sum "$ARCHIVE_NAME.tar.gz" > "$ARCHIVE_NAME.tar.gz.sha256")

@@ -13,6 +13,7 @@ build:
 
 install:
 	$(CARGO) install --path crates/cargo-policy --root "$(INSTALL_ROOT)" --locked --force --bin axiom --bin cargo-policy
+	$(CARGO) install --path crates/policy-semantic --root "$(INSTALL_ROOT)" --locked --force --no-default-features --features driver --bin axiom-hir-driver
 	@profile='$(PROFILE)'; \
 	if [ -z "$$profile" ]; then \
 		case "$${SHELL##*/}" in \
@@ -40,7 +41,7 @@ install:
 	else \
 		echo "$(INSTALL_BIN_DIR) is already configured in $$profile"; \
 	fi; \
-	echo "Installed axiom and cargo-policy in $(INSTALL_BIN_DIR)"; \
+	echo "Installed axiom, cargo-policy, and Axiom's semantic driver in $(INSTALL_BIN_DIR)"; \
 	echo "Restart your shell to load the updated PATH."
 
 check: fmt-check lint test policy-check installer-check
@@ -55,6 +56,7 @@ test:
 	$(CARGO) test --workspace --locked
 
 policy-check:
+	$(CARGO) build --locked -p policy-semantic --bin axiom-hir-driver
 	$(CARGO) run --locked -p cargo-policy -- check
 
 installer-check:

@@ -64,10 +64,13 @@ fi
 
 tar -xzf "$temporary_dir/$archive" -C "$temporary_dir"
 binary="$temporary_dir/${archive%.tar.gz}/axiom"
+driver="$temporary_dir/${archive%.tar.gz}/axiom-hir-driver"
 [ -f "$binary" ] || fail "release archive does not contain axiom"
+[ -f "$driver" ] || fail "release archive does not contain axiom-hir-driver"
 
 mkdir -p "$install_dir"
 install -m 0755 "$binary" "$install_dir/axiom"
+install -m 0755 "$driver" "$install_dir/axiom-hir-driver"
 installed_version="$("$install_dir/axiom" --version)"
 [ "$installed_version" = "axiom ${tag#v}" ] || fail "installed version is $installed_version"
 

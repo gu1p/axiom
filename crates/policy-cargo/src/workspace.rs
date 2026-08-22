@@ -1,5 +1,5 @@
 use camino::{Utf8Path, Utf8PathBuf};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{MetadataCommand, TargetKind};
 use policy_core::{AnalysisError, AnalysisInput, RustEdition, SourceConfig};
 
 use crate::sources::load_sources;
@@ -15,6 +15,7 @@ pub struct Workspace {
     root: Utf8PathBuf,
     target_directory: Utf8PathBuf,
     packages: Vec<PackageRoot>,
+    has_binary_targets: bool,
 }
 
 impl Workspace {
@@ -42,10 +43,17 @@ impl Workspace {
                 })
             })
             .collect();
+        let has_binary_targets = metadata
+            .packages
+            .iter()
+            .filter(|package| metadata.workspace_members.contains(&package.id))
+            .flat_map(|package| &package.targets)
+            .any(|target| target.kind.contains(&TargetKind::Bin));
         Ok(Self {
             root: metadata.workspace_root,
             target_directory: metadata.target_directory,
             packages,
+            has_binary_targets,
         })
     }
 
@@ -55,6 +63,10 @@ impl Workspace {
 
     pub fn policy_path(&self) -> Utf8PathBuf {
         self.root.join("policy.toml")
+    }
+
+    pub fn has_binary_targets(&self) -> bool {
+        self.has_binary_targets
     }
 
     /// Loads every configured Rust source into an analysis input.

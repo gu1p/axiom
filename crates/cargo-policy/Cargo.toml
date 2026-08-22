@@ -19,12 +19,14 @@ clap.workspace = true
 policy-cargo = { path = "../policy-cargo" }
 policy-core = { path = "../policy-core" }
 policy-rules = { path = "../policy-rules" }
+policy-semantic = { path = "../policy-semantic", default-features = false, features = ["frontend"] }
 policy-syntax = { path = "../policy-syntax" }
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -76,7 +76,27 @@ pub struct SourceFileFact {
     pub test_code: Vec<TestCodeFact>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticFindingKind {
+    PrivateDeadCode,
+    DeadPublic,
+    TestOnly,
+    UnnecessaryPublic,
+    UnnecessaryRestrictedVisibility,
+    UnnecessaryCrateVisibility,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticFindingFact {
+    pub kind: SemanticFindingKind,
+    pub item: String,
+    pub item_kind: Option<String>,
+    pub path: Utf8PathBuf,
+    pub span: SourceSpan,
+}
+
 #[derive(Debug, Default)]
 pub struct CodebaseFacts {
     pub files: Vec<SourceFileFact>,
+    pub semantic_findings: Vec<SemanticFindingFact>,
 }

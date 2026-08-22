@@ -132,3 +132,41 @@ fn source_exclusions_are_workspace_relative() {
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("policy check passed (0 Rust files)"));
 }
+
+#[test]
+fn private_dead_code_uses_rustc_and_respects_source_allows() {
+    let workspace = TestWorkspace::new(
+        "fn unused_private() {}\n#[allow(dead_code)]\nfn intentional_hook() {}\n",
+        "deny",
+        50,
+        200,
+    );
+    fs::write(
+        workspace.root().join("policy.toml"),
+        r#"version = 1
+
+[sources]
+include = ["**/*.rs"]
+exclude = []
+
+[rules."dead-code/private"]
+level = "warn"
+"#,
+    )
+    .expect("semantic policy");
+
+    let output = command(&workspace)
+        .args(["--format", "json"])
+        .output()
+        .expect("run private dead-code policy");
+    assert!(output.status.success());
+    let document: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let diagnostics = document["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["rule_id"], "dead-code/private");
+    assert!(
+        diagnostics[0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("unused_private"))
+    );
+}

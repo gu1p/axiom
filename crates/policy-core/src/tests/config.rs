@@ -29,3 +29,19 @@ fn rejects_unknown_top_level_fields() {
         .to_string();
     assert!(error.contains("unknown field"));
 }
+
+#[test]
+fn preserves_native_semantic_configuration() {
+    let config = load(
+        r#"version = 1
+
+[[semantic.production]]
+package = "app"
+bin = "app"
+reason = "shipped binary"
+"#,
+    )
+    .expect("semantic configuration");
+    let semantic = config.semantic.expect("semantic table");
+    assert!(semantic.contains_key("production"));
+}

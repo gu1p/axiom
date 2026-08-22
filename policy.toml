@@ -2,7 +2,7 @@ version = 1
 
 [sources]
 include = ["**/*.rs"]
-exclude = []
+exclude = ["crates/policy-semantic/**"]
 
 [rules."size/function-max-lines"]
 level = "deny"
@@ -14,3 +14,21 @@ limit = 200
 
 [rules."testing/separate-test-files"]
 level = "deny"
+
+[rules."dead-code/private"]
+level = "warn"
+
+[rules."dead-code/public"]
+level = "warn"
+
+[rules."dead-code/test-only"]
+level = "warn"
+
+[rules."visibility/unnecessary-public"]
+level = "warn"
+
+[rules."visibility/unnecessary-restricted"]
+level = "warn"
+
+[rules."visibility/unnecessary-crate"]
+level = "warn"

@@ -11,6 +11,8 @@ pub struct PolicyConfig {
     #[serde(default)]
     pub sources: SourceConfig,
     #[serde(default)]
+    pub semantic: Option<Table>,
+    #[serde(default)]
     pub rules: BTreeMap<String, Table>,
 }
 
