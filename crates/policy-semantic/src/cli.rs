@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHa
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, PipeReader, Read as _, Write as _};
 use std::path::{Path, PathBuf};
@@ -28,6 +28,11 @@ use crate::protocol;
 use crate::toolchain::{
     RustToolchain, clear_protocol_environment, disable_outer_rustc_wrapper, driver_executable,
     validate_driver_protocol,
+};
+
+const AXIOM_BUILD_VERSION: &str = match option_env!("AXIOM_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
 };
 
 #[derive(Debug, Parser)]
@@ -477,6 +482,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                 .collect::<Result<Vec<_>>>()
         })
         .transpose()?;
+    let managed_target_dir = args.target_dir.is_none();
     let target_dir = args.target_dir.as_ref().map_or_else(
         || Ok(default_target_dir(&workspace_root)),
         |target_dir| {
@@ -484,6 +490,9 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                 .with_context(|| format!("resolve target directory {}", target_dir.display()))
         },
     )?;
+    let _target_dir_lock = managed_target_dir
+        .then(|| acquire_managed_target_lock(&target_dir))
+        .transpose()?;
     fs::create_dir_all(&target_dir)
         .with_context(|| format!("create target directory {}", target_dir.display()))?;
 
@@ -584,6 +593,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         workspace_root: &workspace_root,
         manifest_path: &manifest_path,
         target_dir: &target_dir,
+        managed_target_dir,
         driver: &driver,
         toolchain: &toolchain,
         collection_options: if args.output_format == OutputFormat::Json {
@@ -1066,6 +1076,7 @@ struct InstrumentedCargo<'a> {
     workspace_root: &'a Path,
     manifest_path: &'a Path,
     target_dir: &'a Path,
+    managed_target_dir: bool,
     driver: &'a Path,
     toolchain: &'a RustToolchain,
     collection_options: CollectionOptions,
@@ -1432,6 +1443,17 @@ impl InstrumentedCargo<'_> {
         invocation: CargoInvocation<'_>,
         feature_profile: &FeatureProfile,
     ) -> Result<()> {
+        self.run_with_cache_repair(run_id, graph_dir, invocation, feature_profile, true)
+    }
+
+    fn run_with_cache_repair(
+        &self,
+        run_id: &str,
+        graph_dir: &Path,
+        invocation: CargoInvocation<'_>,
+        feature_profile: &FeatureProfile,
+        allow_cache_repair: bool,
+    ) -> Result<()> {
         let ConfiguredCargoCommand {
             mut command,
             subcommand,
@@ -1440,6 +1462,22 @@ impl InstrumentedCargo<'_> {
         } = self.command(run_id, graph_dir, invocation, feature_profile)?;
         let status = if let Some(cargo_output) = cargo_output {
             let (status, cargo_output) = cargo_output.run(command, subcommand)?;
+            let captured_output = fs::read(cargo_output.path())
+                .context("read captured Cargo output for cache validation")?;
+            if !status.success()
+                && allow_cache_repair
+                && self.managed_target_dir
+                && output_indicates_missing_target_artifact(&captured_output, self.target_dir)
+            {
+                reset_managed_target_dir(self.target_dir)?;
+                return self.run_with_cache_repair(
+                    run_id,
+                    graph_dir,
+                    invocation,
+                    feature_profile,
+                    false,
+                );
+            }
             let mut reader = cargo_output
                 .reopen()
                 .context("open temporary Cargo output file for reading")?;
@@ -2166,6 +2204,12 @@ fn workspace_package<'a>(
 // while leaving the ordinary workspace name readable.
 const DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES: usize = 240;
 
+fn semantic_cache_namespace() -> String {
+    let mut hasher = DefaultHasher::new();
+    AXIOM_BUILD_VERSION.hash(&mut hasher);
+    format!("hir-{}-{:016x}", protocol::VERSION, hasher.finish())
+}
+
 fn default_target_dir(workspace_root: &Path) -> PathBuf {
     let workspace = workspace_root
         .file_name()
@@ -2182,7 +2226,53 @@ fn default_target_dir(workspace_root: &Path) -> PathBuf {
     let workspace = format!("{}{suffix}", &workspace[..workspace_end]);
     env::temp_dir()
         .join("axiom-semantic-target")
+        .join(semantic_cache_namespace())
         .join(workspace)
+}
+
+fn acquire_managed_target_lock(target_dir: &Path) -> Result<File> {
+    let parent = target_dir
+        .parent()
+        .context("managed semantic target directory has no parent")?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("create semantic cache directory {}", parent.display()))?;
+    let mut lock_name = target_dir
+        .file_name()
+        .context("managed semantic target directory has no file name")?
+        .to_os_string();
+    lock_name.push(".lock");
+    let lock_path = parent.join(lock_name);
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("open semantic cache lock {}", lock_path.display()))?;
+    lock.lock()
+        .with_context(|| format!("lock semantic cache {}", target_dir.display()))?;
+    Ok(lock)
+}
+
+fn output_indicates_missing_target_artifact(output: &[u8], target_dir: &Path) -> bool {
+    let output = String::from_utf8_lossy(output);
+    output.contains("No such file or directory")
+        && output.contains("couldn't read")
+        && output.contains(&*target_dir.to_string_lossy())
+}
+
+fn reset_managed_target_dir(target_dir: &Path) -> Result<()> {
+    match fs::remove_dir_all(target_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("remove corrupt semantic cache {}", target_dir.display())
+            });
+        }
+    }
+    fs::create_dir_all(target_dir)
+        .with_context(|| format!("recreate semantic cache {}", target_dir.display()))
 }
 
 fn read_fragments(graph_dir: &Path) -> Result<Vec<Fragment>> {
@@ -2258,7 +2348,9 @@ mod tests {
         Args, CargoInvocation, DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES, DiagnosticRenderer,
         LintLevel, LintLevels, ProductionProduct, ProductionSelection, WorkspaceLibrarySource,
         classify_non_production_target, default_target_dir, definition_packages,
-        fix_plan_signature, json_definition_kind, json_finding_kind, validate_excluded_crates,
+        fix_plan_signature, json_definition_kind, json_finding_kind,
+        output_indicates_missing_target_artifact, semantic_cache_namespace,
+        validate_excluded_crates,
     };
 
     fn render_diagnostic(finding: &Finding<'_>) -> String {
@@ -2302,8 +2394,12 @@ mod tests {
         let target_dir = default_target_dir(workspace_root);
 
         assert_eq!(
-            target_dir.parent(),
+            target_dir.parent().and_then(Path::parent),
             Some(std::env::temp_dir().join("axiom-semantic-target").as_path())
+        );
+        assert_eq!(
+            target_dir.parent().and_then(Path::file_name),
+            Some(semantic_cache_namespace().as_ref())
         );
         assert!(
             target_dir
@@ -2315,6 +2411,43 @@ mod tests {
             target_dir,
             default_target_dir(Path::new("/another/path/to/example-workspace"))
         );
+    }
+
+    #[test]
+    fn default_target_dir_is_namespaced_by_semantic_analyzer_build() {
+        let namespace = semantic_cache_namespace();
+
+        assert!(namespace.starts_with(&format!("hir-{}-", crate::protocol::VERSION)));
+        assert_eq!(
+            namespace
+                .rsplit_once('-')
+                .expect("namespace has a version hash")
+                .1
+                .len(),
+            16
+        );
+    }
+
+    #[test]
+    fn missing_generated_target_artifact_is_recoverable_cache_failure() {
+        let target_dir = Path::new("/tmp/axiom-semantic-target/example");
+        let output = format!(
+            "error: couldn't read `{}/debug/build/pkg/out/bindgen.rs`: No such file or directory (os error 2)",
+            target_dir.display()
+        );
+
+        assert!(output_indicates_missing_target_artifact(
+            output.as_bytes(),
+            target_dir
+        ));
+        assert!(!output_indicates_missing_target_artifact(
+            b"error: couldn't read `/project/src/missing.rs`: No such file or directory",
+            target_dir
+        ));
+        assert!(!output_indicates_missing_target_artifact(
+            format!("error: failed to compile {}", target_dir.display()).as_bytes(),
+            target_dir
+        ));
     }
 
     #[test]
