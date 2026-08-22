@@ -9,7 +9,17 @@ rule layers ready for architecture, dependency, complexity, and semantic checks.
 
 ## Usage
 
-Build or install Axiom, then initialize and check a workspace:
+Install the latest release for macOS or Linux with:
+
+```console
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/gu1p/axiom/main/install.sh | sh
+```
+
+The installer detects the operating system and CPU architecture, verifies the release checksum,
+and installs `axiom` into `${CARGO_HOME:-$HOME/.cargo}/bin`. It adds that directory to the current
+user's shell profile when necessary; restart the shell afterward.
+
+To build and install from source instead:
 
 ```console
 make build

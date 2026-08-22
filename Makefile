@@ -6,7 +6,7 @@ PROFILE ?=
 
 .DEFAULT_GOAL := build
 .NOTPARALLEL:
-.PHONY: build install check fmt-check lint test policy-check
+.PHONY: build install check fmt-check lint test policy-check installer-check
 
 build:
 	$(CARGO) build --workspace --all-targets --locked
@@ -43,7 +43,7 @@ install:
 	echo "Installed axiom and cargo-policy in $(INSTALL_BIN_DIR)"; \
 	echo "Restart your shell to load the updated PATH."
 
-check: fmt-check lint test policy-check
+check: fmt-check lint test policy-check installer-check
 
 fmt-check:
 	$(CARGO) fmt --all --check
@@ -56,3 +56,6 @@ test:
 
 policy-check:
 	$(CARGO) run --locked -p cargo-policy -- check
+
+installer-check:
+	sh -n install.sh
