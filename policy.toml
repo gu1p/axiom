@@ -1,0 +1,13 @@
+version = 1
+
+[sources]
+include = ["**/*.rs"]
+exclude = []
+
+[rules."size/function-max-lines"]
+level = "deny"
+limit = 50
+
+[rules."size/file-max-lines"]
+level = "deny"
+limit = 200

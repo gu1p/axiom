@@ -1,0 +1,49 @@
+use std::fs;
+
+use tempfile::TempDir;
+
+pub struct TestWorkspace {
+    directory: TempDir,
+}
+
+impl TestWorkspace {
+    pub fn new(source: &str, function_level: &str, function_limit: u32, file_limit: u32) -> Self {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        fs::create_dir(directory.path().join("src")).expect("source directory");
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("manifest");
+        fs::write(directory.path().join("src/lib.rs"), source).expect("Rust source");
+        fs::write(
+            directory.path().join("policy.toml"),
+            format!(
+                r#"version = 1
+
+[sources]
+include = ["**/*.rs"]
+exclude = []
+
+[rules."size/function-max-lines"]
+level = "{function_level}"
+limit = {function_limit}
+
+[rules."size/file-max-lines"]
+level = "deny"
+limit = {file_limit}
+"#,
+            ),
+        )
+        .expect("policy configuration");
+        Self { directory }
+    }
+
+    pub fn manifest(&self) -> std::path::PathBuf {
+        self.directory.path().join("Cargo.toml")
+    }
+
+    pub fn root(&self) -> &std::path::Path {
+        self.directory.path()
+    }
+}

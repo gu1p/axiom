@@ -1,0 +1,16 @@
+[package]
+name = "policy-cargo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cargo_metadata.workspace = true
+camino.workspace = true
+globset.workspace = true
+ignore.workspace = true
+policy-core = { path = "../policy-core" }
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,30 @@
+[package]
+name = "cargo-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+default-run = "axiom"
+
+[[bin]]
+name = "axiom"
+path = "src/main.rs"
+
+[[bin]]
+name = "cargo-policy"
+path = "src/bin/cargo-policy.rs"
+
+[dependencies]
+camino.workspace = true
+clap.workspace = true
+policy-cargo = { path = "../policy-cargo" }
+policy-core = { path = "../policy-core" }
+policy-rules = { path = "../policy-rules" }
+policy-syntax = { path = "../policy-syntax" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

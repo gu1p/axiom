@@ -1,0 +1,173 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Run repository checks
+        run: make check
+
+  tag:
+    needs: quality
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Create next patch tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..10}; do
+            git fetch --tags --force
+            existing="$(git tag --points-at "$GITHUB_SHA" --list 'v*' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+            if [ -n "$existing" ]; then
+              tag="$existing"
+              break
+            fi
+
+            latest="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -n 1 || true)"
+            if [ -z "$latest" ]; then
+              tag="v0.1.0"
+            else
+              version="${latest#v}"
+              IFS=. read -r major minor patch <<< "$version"
+              tag="v${major}.${minor}.$((patch + 1))"
+            fi
+
+            if gh api --silent --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA"; then
+              break
+            fi
+            unset tag
+            sleep "$attempt"
+          done
+
+          if [ -z "${tag:-}" ]; then
+            echo "Could not allocate a version tag after 10 attempts" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Created $tag for $GITHUB_SHA"
+
+  build:
+    needs: tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            linkage: static
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            linkage: static
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            linkage: system
+          - os: macos-15
+            target: aarch64-apple-darwin
+            linkage: system
+    runs-on: ${{ matrix.os }}
+    env:
+      AXIOM_VERSION: ${{ needs.tag.outputs.version }}
+      ARCHIVE_NAME: axiom-${{ needs.tag.outputs.tag }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust target
+        run: rustup target add "${{ matrix.target }}"
+      - name: Install musl linker
+        if: matrix.linkage == 'static'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+      - name: Build release binary
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: cargo build --release --locked --target "${{ matrix.target }}" --bin axiom
+      - name: Verify version and linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/axiom"
+          test "$("$binary" --version)" = "axiom $AXIOM_VERSION"
+          if [ "${{ matrix.linkage }}" = "static" ]; then
+            if readelf -l "$binary" | grep -q 'Requesting program interpreter'; then
+              echo "Linux release unexpectedly has a dynamic interpreter" >&2
+              exit 1
+            fi
+          else
+            unexpected="$(otool -L "$binary" | tail -n +2 | awk '{print $1}' \
+              | grep -Ev '^(/usr/lib/|/System/Library/)' || true)"
+            if [ -n "$unexpected" ]; then
+              echo "Unexpected non-system macOS libraries:" >&2
+              echo "$unexpected" >&2
+              exit 1
+            fi
+          fi
+      - name: Package binary and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/$ARCHIVE_NAME"
+          cp "target/${{ matrix.target }}/release/axiom" "dist/$ARCHIVE_NAME/axiom"
+          cp README.md "dist/$ARCHIVE_NAME/README.md"
+          tar -C dist -czf "dist/$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "dist/$ARCHIVE_NAME.tar.gz" > "dist/$ARCHIVE_NAME.tar.gz.sha256"
+          else
+            shasum -a 256 "dist/$ARCHIVE_NAME.tar.gz" > "dist/$ARCHIVE_NAME.tar.gz.sha256"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+
+  publish:
+    needs: [tag, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" release-assets/* --verify-tag --generate-notes \
+              --title "Axiom $TAG" --repo "$GITHUB_REPOSITORY"
+          fi
