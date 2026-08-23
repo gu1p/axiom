@@ -140,6 +140,19 @@ limit = 50
 scope = "production"
 ```
 
+Every finding names its exact severity key and explains all available values immediately after its
+code-oriented help:
+
+```text
+  = help: reduce the declaration to pub(crate)
+  = policy: rules."visibility/unnecessary-public".level = "warn" in policy.toml
+  = configure: "deny" = error, "warn" = warning, "allow" = disabled
+```
+
+The reported dotted key identifies the corresponding table even when `--config` selects a policy
+file with another name. JSON diagnostics expose the same information in their `configuration`
+object.
+
 Source globs are evaluated against forward-slash workspace-relative paths; normal ignore files,
 `.git`, Cargo's target directory, and directory symlinks are excluded from discovery.
 
@@ -180,6 +193,18 @@ accepts `"deny"` or `"warn"`. Set `check-docs = false` to skip rustdoc. Set
 the workspace; execution coverage and the `warnings` policy still apply. Set `enabled = false`
 only when another required system owns Clippy execution. If the component is missing, install it
 with `rustup component add clippy`.
+
+Override one compiler, Clippy, or rustdoc lint without replacing the built-in profile:
+
+```toml
+[tools.clippy.lints]
+"clippy::unwrap_used" = "deny"
+"clippy::needless_return" = "allow"
+"rustdoc::broken_intra_doc_links" = "warn"
+```
+
+These per-lint levels are applied last, so they take precedence over both the selected profile and
+the global `warnings` setting. Wrapped lint diagnostics print the exact override key to use.
 
 `testing/separate-test-files` rejects inline `#[cfg(test)]` implementations and test-attributed
 functions in production files. External test module declarations remain valid, so private unit
@@ -252,7 +277,9 @@ musl-only host, disable semantic rules or run Axiom in a glibc environment.
 JSON output is a deterministic document with `schema_version = 1`, an outcome, diagnostics, and a
 summary. Native diagnostics use `kind = "policy"`; wrapped compiler diagnostics use
 `kind = "tool"` and identify `tool = "clippy"` or `tool = "rustdoc"`. Span byte offsets are
-zero-based; line and Unicode-scalar columns are one-based.
+zero-based; line and Unicode-scalar columns are one-based. Configurable findings include a
+`configuration` object containing the policy file, exact key, effective value, and the meaning of
+each supported level.
 
 ## Architecture
 

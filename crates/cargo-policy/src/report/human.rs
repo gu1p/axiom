@@ -1,30 +1,38 @@
-use std::io::{self, IsTerminal as _};
-
+use camino::Utf8Path;
 use policy_core::{AnalysisError, AnalysisInput, Diagnostic, Level, SourceSpan, SourceUnit};
 
 use crate::args::ColorChoice;
 use crate::tools::{ToolDiagnostic, ToolReport};
 
-use super::output::{stderr_line, stderr_write};
+use super::{
+    configuration,
+    output::{color_enabled, paint, severity_color, stderr_line, stderr_write},
+};
 
 pub fn check(
     diagnostics: &[Diagnostic],
     tools: &[ToolReport],
     input: &AnalysisInput,
+    config_path: &Utf8Path,
     choice: ColorChoice,
 ) {
     let color = color_enabled(choice);
-    policy_diagnostics(diagnostics, input, color);
+    policy_diagnostics(diagnostics, input, config_path, color);
     for report in tools {
         for diagnostic in &report.diagnostics {
-            tool_diagnostic(diagnostic, input, color);
+            tool_diagnostic(diagnostic, input, config_path, color);
         }
     }
     let (denied, warned) = diagnostic_counts(diagnostics, tools);
     summary(input, tools, denied, warned);
 }
 
-fn policy_diagnostics(diagnostics: &[Diagnostic], input: &AnalysisInput, color: bool) {
+fn policy_diagnostics(
+    diagnostics: &[Diagnostic],
+    input: &AnalysisInput,
+    config_path: &Utf8Path,
+    color: bool,
+) {
     for diagnostic in diagnostics {
         let severity = if diagnostic.level == Level::Warn {
             "warning"
@@ -40,7 +48,9 @@ fn policy_diagnostics(diagnostics: &[Diagnostic], input: &AnalysisInput, color: 
         if let Some(limit) = diagnostic.limit {
             stderr_line(format_args!("  = limit: {limit} physical lines"));
         }
-        stderr_line(format_args!("  = help: {}\n", diagnostic.help));
+        stderr_line(format_args!("  = help: {}", diagnostic.help));
+        configuration::write_human(config_path, &configuration::policy(diagnostic));
+        stderr_line(format_args!(""));
     }
 }
 
@@ -91,31 +101,39 @@ fn summary(input: &AnalysisInput, tools: &[ToolReport], denied: usize, warned: u
     }
 }
 
-fn tool_diagnostic(diagnostic: &ToolDiagnostic, input: &AnalysisInput, color: bool) {
+fn tool_diagnostic(
+    diagnostic: &ToolDiagnostic,
+    input: &AnalysisInput,
+    config_path: &Utf8Path,
+    color: bool,
+) {
     if let Some(rendered) = &diagnostic.rendered {
         stderr_write(format_args!("{rendered}"));
         if !rendered.ends_with('\n') {
             stderr_line(format_args!(""));
         }
-        return;
-    }
-    let severity = if diagnostic.level == Level::Warn {
-        "warning"
     } else {
-        "error"
-    };
-    let heading = paint(severity, severity_color(severity), color);
-    stderr_line(format_args!(
-        "{heading}[{}::{}]: {}",
-        diagnostic.tool, diagnostic.rule_id, diagnostic.message
-    ));
-    if let (Some(path), Some(span)) = (&diagnostic.path, diagnostic.span) {
-        location(path, span, input, color);
-    } else if let Some(path) = &diagnostic.path {
-        stderr_line(format_args!(" --> {path}"));
+        let severity = if diagnostic.level == Level::Warn {
+            "warning"
+        } else {
+            "error"
+        };
+        let heading = paint(severity, severity_color(severity), color);
+        stderr_line(format_args!(
+            "{heading}[{}::{}]: {}",
+            diagnostic.tool, diagnostic.rule_id, diagnostic.message
+        ));
+        if let (Some(path), Some(span)) = (&diagnostic.path, diagnostic.span) {
+            location(path, span, input, color);
+        } else if let Some(path) = &diagnostic.path {
+            stderr_line(format_args!(" --> {path}"));
+        }
+        if let Some(help) = &diagnostic.help {
+            stderr_line(format_args!("  = help: {help}"));
+        }
     }
-    if let Some(help) = &diagnostic.help {
-        stderr_line(format_args!("  = help: {help}"));
+    if let Some(hint) = configuration::tool(diagnostic) {
+        configuration::write_human(config_path, &hint);
     }
     stderr_line(format_args!(""));
 }
@@ -171,24 +189,4 @@ fn snippet(source: &SourceUnit, span: SourceSpan, color: bool) {
         paint(&marker, "31", color),
         gutter = gutter
     ));
-}
-
-fn color_enabled(choice: ColorChoice) -> bool {
-    match choice {
-        ColorChoice::Always => true,
-        ColorChoice::Never => false,
-        ColorChoice::Auto => io::stderr().is_terminal(),
-    }
-}
-
-fn severity_color(severity: &str) -> &'static str {
-    if severity == "warning" { "33" } else { "31" }
-}
-
-fn paint(text: &str, code: &str, enabled: bool) -> String {
-    if enabled {
-        format!("\u{1b}[{code}m{text}\u{1b}[0m")
-    } else {
-        text.to_owned()
-    }
 }

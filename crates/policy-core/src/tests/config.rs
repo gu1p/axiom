@@ -1,6 +1,7 @@
 use std::fs;
 
 use super::PolicyConfig;
+use crate::Level;
 
 fn load(text: &str) -> Result<PolicyConfig, super::ConfigError> {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -72,6 +73,10 @@ check-docs = false
 targets = "default"
 features = ["server", "postgres"]
 warnings = "warn"
+
+[tools.clippy.lints]
+"clippy::unwrap_used" = "allow"
+"rustdoc::broken_intra_doc_links" = "deny"
 "#,
     )
     .expect("custom Clippy configuration");
@@ -83,6 +88,14 @@ warnings = "warn"
         Some(["server".to_owned(), "postgres".to_owned()].as_slice())
     );
     assert!(!config.tools.clippy.denies_warnings());
+    assert_eq!(
+        config.tools.clippy.lints["clippy::unwrap_used"],
+        Level::Allow
+    );
+    assert_eq!(
+        config.tools.clippy.lints["rustdoc::broken_intra_doc_links"],
+        Level::Deny
+    );
 
     let error = load(
         r#"version = 1

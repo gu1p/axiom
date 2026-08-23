@@ -1,4 +1,4 @@
-use policy_core::ClippyConfig;
+use policy_core::{ClippyConfig, Level};
 
 const RUST_WARN: &[&str] = &[
     "future-incompatible",
@@ -140,6 +140,12 @@ pub fn compiler_arguments(config: &ClippyConfig) -> Vec<String> {
         extend(&mut arguments, "-A", None, RUST_ALLOW);
         extend(&mut arguments, "-A", Some("clippy"), CLIPPY_ALLOW);
     }
+    for (lint, level) in config
+        .lint_overrides()
+        .filter(|(lint, _)| !lint.starts_with("rustdoc::"))
+    {
+        push(&mut arguments, level_flag(level), lint);
+    }
     arguments
 }
 
@@ -151,7 +157,21 @@ pub fn rustdoc_arguments(config: &ClippyConfig) -> Vec<String> {
     if config.denies_warnings() {
         push(&mut arguments, "-D", "warnings");
     }
+    for (lint, level) in config
+        .lint_overrides()
+        .filter(|(lint, _)| !lint.starts_with("clippy::"))
+    {
+        push(&mut arguments, level_flag(level), lint);
+    }
     arguments
+}
+
+const fn level_flag(level: Level) -> &'static str {
+    match level {
+        Level::Allow => "-A",
+        Level::Warn => "--force-warn",
+        Level::Deny => "-D",
+    }
 }
 
 fn extend(arguments: &mut Vec<String>, level: &str, namespace: Option<&str>, lints: &[&str]) {

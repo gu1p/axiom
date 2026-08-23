@@ -155,3 +155,15 @@ significant_drop_tightening = "allow"
 Use `profile = "workspace"` when a repository intentionally owns a different complete profile in
 its Cargo manifests. This switches off Axiom's selections rather than merging two competing
 profiles.
+
+Per-lint entries under `[tools.clippy.lints]` are applied after this profile and the global
+`warnings` policy. Use the exact lint code printed by Axiom:
+
+```toml
+[tools.clippy.lints]
+"clippy::unwrap_used" = "deny"
+"clippy::needless_return" = "allow"
+"rustdoc::broken_intra_doc_links" = "warn"
+```
+
+The supported values are `deny` (error), `warn` (non-blocking warning), and `allow` (disabled).

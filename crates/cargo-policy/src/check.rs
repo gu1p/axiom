@@ -38,7 +38,7 @@ pub fn run(options: &CheckOptions) -> u8 {
         Ok(reports) => reports,
         Err(error) => return operational(options, &[error], Some(&input)),
     };
-    report::check(options, &input, &diagnostics, &tool_reports);
+    report::check(options, &input, &config_path, &diagnostics, &tool_reports);
     u8::from(
         diagnostics.iter().any(|item| item.level == Level::Deny)
             || tool_reports.iter().any(|report| {

@@ -1,7 +1,10 @@
+use camino::Utf8Path;
 use policy_core::{AnalysisError, Diagnostic, Level, RuleClass, SourceSpan};
 use serde::Serialize;
 
 use crate::tools::{ToolDiagnostic, ToolReport};
+
+use super::configuration;
 
 #[derive(Serialize)]
 struct JsonOutput {
@@ -24,6 +27,7 @@ struct JsonDiagnostic {
     span: Option<SourceSpan>,
     observed: Option<u32>,
     limit: Option<u32>,
+    configuration: Option<configuration::JsonHint>,
 }
 
 #[derive(Serialize)]
@@ -32,7 +36,7 @@ struct Summary {
     warnings: usize,
 }
 
-pub fn check(diagnostics: &[Diagnostic], tools: &[ToolReport]) {
+pub fn check(diagnostics: &[Diagnostic], tools: &[ToolReport], config_path: &Utf8Path) {
     let errors = diagnostics
         .iter()
         .filter(|item| item.level == Level::Deny)
@@ -53,12 +57,12 @@ pub fn check(diagnostics: &[Diagnostic], tools: &[ToolReport]) {
             .count();
     let json_diagnostics = diagnostics
         .iter()
-        .map(JsonDiagnostic::from)
+        .map(|diagnostic| policy_diagnostic(diagnostic, config_path))
         .chain(
             tools
                 .iter()
                 .flat_map(|report| &report.diagnostics)
-                .map(JsonDiagnostic::from),
+                .map(|diagnostic| tool_diagnostic(diagnostic, config_path)),
         )
         .collect();
     let output = JsonOutput {
@@ -101,6 +105,7 @@ impl From<&Diagnostic> for JsonDiagnostic {
             span: Some(value.span),
             observed: value.observed,
             limit: value.limit,
+            configuration: None,
         }
     }
 }
@@ -119,6 +124,7 @@ impl From<&AnalysisError> for JsonDiagnostic {
             span: value.span,
             observed: None,
             limit: None,
+            configuration: None,
         }
     }
 }
@@ -141,8 +147,22 @@ impl From<&ToolDiagnostic> for JsonDiagnostic {
             span: value.span,
             observed: None,
             limit: None,
+            configuration: None,
         }
     }
+}
+
+fn policy_diagnostic(value: &Diagnostic, path: &Utf8Path) -> JsonDiagnostic {
+    let mut diagnostic = JsonDiagnostic::from(value);
+    diagnostic.configuration = Some(configuration::json(path, configuration::policy(value)));
+    diagnostic
+}
+
+fn tool_diagnostic(value: &ToolDiagnostic, path: &Utf8Path) -> JsonDiagnostic {
+    let mut diagnostic = JsonDiagnostic::from(value);
+    diagnostic.configuration =
+        configuration::tool(value).map(|hint| configuration::json(path, hint));
+    diagnostic
 }
 
 fn print_json(output: &JsonOutput) {

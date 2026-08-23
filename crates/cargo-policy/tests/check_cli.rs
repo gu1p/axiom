@@ -93,6 +93,15 @@ fn function_over_limit_is_a_versioned_json_violation() {
     );
     assert_eq!(document["diagnostics"][0]["observed"], 51);
     assert_eq!(document["diagnostics"][0]["limit"], 50);
+    assert_eq!(
+        document["diagnostics"][0]["configuration"]["key"],
+        "rules.\"size/function-max-lines\".level"
+    );
+    assert_eq!(document["diagnostics"][0]["configuration"]["value"], "deny");
+    assert_eq!(
+        document["diagnostics"][0]["configuration"]["levels"]["allow"],
+        "disabled"
+    );
 }
 
 #[test]
@@ -160,6 +169,13 @@ fn warning_does_not_fail_the_check() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("warning[size/function-max-lines]"));
+    assert!(
+        stderr
+            .contains("policy: rules.\"size/function-max-lines\".level = \"warn\" in policy.toml")
+    );
+    assert!(
+        stderr.contains("configure: \"deny\" = error, \"warn\" = warning, \"allow\" = disabled")
+    );
     assert!(stderr.contains("0 error(s) and 1 warning(s)"));
 }
 
@@ -279,6 +295,29 @@ warnings = "{}"
     .expect("Clippy policy");
 }
 
+fn write_clippy_lint_override(workspace: &TestWorkspace, level: &str) {
+    fs::write(
+        workspace.root().join("policy.toml"),
+        format!(
+            r#"version = 1
+
+[sources]
+include = ["**/*.rs"]
+exclude = []
+
+[tools.clippy]
+enabled = true
+check-docs = false
+warnings = "deny"
+
+[tools.clippy.lints]
+"clippy::needless_return" = "{level}"
+"#,
+        ),
+    )
+    .expect("per-lint Clippy policy");
+}
+
 #[test]
 fn clippy_denied_warning_is_a_versioned_tool_diagnostic() {
     let workspace = TestWorkspace::new("pub fn answer() -> u8 { return 42; }\n", "deny", 50, 200);
@@ -298,6 +337,18 @@ fn clippy_denied_warning_is_a_versioned_tool_diagnostic() {
         document["diagnostics"][0]["rule_id"],
         "clippy::needless_return"
     );
+    assert_eq!(
+        document["diagnostics"][0]["configuration"]["key"],
+        "tools.clippy.lints.\"clippy::needless_return\""
+    );
+
+    let human = command(&workspace)
+        .output()
+        .expect("render Clippy guidance");
+    assert_eq!(human.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&human.stderr).contains(
+        "policy: tools.clippy.lints.\"clippy::needless_return\" = \"deny\" in policy.toml"
+    ));
 }
 
 #[test]
@@ -309,7 +360,12 @@ fn clippy_warning_can_be_non_blocking_or_disabled() {
         .args(["--format", "json"])
         .output()
         .expect("run non-blocking Clippy");
-    assert!(warning.status.success());
+    assert!(
+        warning.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&warning.stdout),
+        String::from_utf8_lossy(&warning.stderr)
+    );
     let document: Value = serde_json::from_slice(&warning.stdout).expect("valid JSON");
     assert_eq!(document["outcome"], "passed");
     assert_eq!(document["summary"]["warnings"], 1);
@@ -318,6 +374,33 @@ fn clippy_warning_can_be_non_blocking_or_disabled() {
     let disabled = command(&workspace).output().expect("run without Clippy");
     assert!(disabled.status.success());
     assert!(String::from_utf8_lossy(&disabled.stderr).contains("axiom check passed"));
+}
+
+#[test]
+fn individual_clippy_lint_can_be_demoted_or_disabled() {
+    let workspace = TestWorkspace::new("pub fn answer() -> u8 { return 42; }\n", "deny", 50, 200);
+    write_clippy_lint_override(&workspace, "warn");
+
+    let warning = command(&workspace)
+        .args(["--format", "json"])
+        .output()
+        .expect("run demoted Clippy lint");
+    assert!(
+        warning.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&warning.stdout),
+        String::from_utf8_lossy(&warning.stderr)
+    );
+    let document: Value = serde_json::from_slice(&warning.stdout).expect("valid JSON");
+    assert_eq!(document["summary"]["warnings"], 1);
+    assert_eq!(document["diagnostics"][0]["configuration"]["value"], "warn");
+
+    write_clippy_lint_override(&workspace, "allow");
+    let allowed = command(&workspace)
+        .output()
+        .expect("run allowed Clippy lint");
+    assert!(allowed.status.success());
+    assert!(String::from_utf8_lossy(&allowed.stderr).contains("axiom check passed"));
 }
 
 #[test]
@@ -377,5 +460,15 @@ warnings = "deny"
             .iter()
             .any(|item| item["tool"] == "rustdoc"
                 && item["rule_id"] == "rustdoc::missing_crate_level_docs")
+    );
+    let rustdoc = document["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .find(|item| item["tool"] == "rustdoc")
+        .expect("rustdoc diagnostic");
+    assert_eq!(
+        rustdoc["configuration"]["key"],
+        "tools.clippy.lints.\"rustdoc::missing_crate_level_docs\""
     );
 }

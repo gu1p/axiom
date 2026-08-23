@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
+
+use crate::Level;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -16,6 +20,7 @@ pub struct ClippyConfig {
     pub features: ClippyFeatureSelection,
     pub no_default_features: bool,
     pub warnings: ClippyWarningPolicy,
+    pub lints: BTreeMap<String, Level>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -68,6 +73,7 @@ impl Default for ClippyConfig {
             features: ClippyFeatureSelection::Default,
             no_default_features: false,
             warnings: ClippyWarningPolicy::Deny,
+            lints: BTreeMap::new(),
         }
     }
 }
@@ -102,5 +108,11 @@ impl ClippyConfig {
     #[must_use]
     pub fn denies_warnings(&self) -> bool {
         matches!(self.warnings, ClippyWarningPolicy::Deny)
+    }
+
+    pub fn lint_overrides(&self) -> impl Iterator<Item = (&str, Level)> {
+        self.lints
+            .iter()
+            .map(|(name, level)| (name.as_str(), *level))
     }
 }
