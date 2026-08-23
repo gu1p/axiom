@@ -1,3 +1,5 @@
+//! Lossless Rust syntax facts used by Axiom policies.
+
 mod test_items;
 
 use policy_core::{
@@ -5,8 +7,8 @@ use policy_core::{
     SourceFileFact,
 };
 use ra_ap_syntax::{
-    AstNode, AstToken, Edition, SourceFile, SyntaxKind, ast,
-    ast::{HasAttrs, HasDocComments, HasName},
+    AstNode as _, AstToken as _, Edition, SourceFile, SyntaxKind, ast,
+    ast::{HasAttrs as _, HasDocComments as _, HasName as _},
 };
 
 #[derive(Debug, Default)]
@@ -90,7 +92,7 @@ fn function_bounds(function: &ast::Fn) -> (usize, usize) {
                 .then_some(token.text_range())
         })
         .fold((None, None), |(first, _), range| {
-            (first.or(Some(range.start())), Some(range.end()))
+            (first.or_else(|| Some(range.start())), Some(range.end()))
         });
     let first_attr = function
         .attrs()
@@ -105,8 +107,8 @@ fn function_bounds(function: &ast::Fn) -> (usize, usize) {
         .into_iter()
         .flatten()
         .min()
-        .unwrap_or(raw.start());
-    (start.into(), last_code.unwrap_or(raw.end()).into())
+        .unwrap_or_else(|| raw.start());
+    (start.into(), last_code.unwrap_or_else(|| raw.end()).into())
 }
 
 fn map_edition(edition: RustEdition) -> Edition {

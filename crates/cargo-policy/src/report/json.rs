@@ -146,6 +146,9 @@ impl From<&ToolDiagnostic> for JsonDiagnostic {
 }
 
 fn print_json(output: &JsonOutput) {
-    serde_json::to_writer_pretty(std::io::stdout(), output).expect("writing JSON to stdout");
-    println!();
+    use std::io::Write as _;
+
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, output).expect("writing JSON to stdout");
+    writeln!(stdout).expect("writing JSON terminator to stdout");
 }

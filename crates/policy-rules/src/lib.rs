@@ -1,3 +1,5 @@
+//! Built-in executable-policy rule registry.
+
 mod file_lines;
 mod function_lines;
 mod limit;

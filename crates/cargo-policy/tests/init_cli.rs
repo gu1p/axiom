@@ -30,6 +30,8 @@ fn init_creates_the_default_policy_and_refuses_to_overwrite_it() {
     assert!(config.contains("scope = \"production\""));
     assert!(config.contains("test = ["));
     assert!(config.contains("[tools.clippy]"));
+    assert!(config.contains("profile = \"axiom\""));
+    assert!(config.contains("check-docs = true"));
     assert!(config.contains("warnings = \"deny\""));
     assert!(config.contains("[[semantic.production]]"));
     assert!(config.contains("# [rules.\"dead-code/public\"]"));

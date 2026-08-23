@@ -1,4 +1,8 @@
+mod cargo;
 mod clippy;
+mod rustdoc;
+
+use std::env;
 
 use camino::Utf8PathBuf;
 use policy_core::{AnalysisError, AnalysisInput, Level, SourceSpan, ToolConfig};
@@ -25,6 +29,14 @@ pub fn run(input: &AnalysisInput, config: &ToolConfig) -> Result<Vec<ToolReport>
     let mut reports = Vec::new();
     if config.clippy.enabled {
         reports.push(clippy::run(input, &config.clippy)?);
+        if config.clippy.check_docs {
+            reports.push(rustdoc::run(input, &config.clippy)?);
+        }
     }
     Ok(reports)
+}
+
+fn offline() -> bool {
+    env::var("AXIOM_OFFLINE")
+        .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
 }

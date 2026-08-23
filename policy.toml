@@ -7,6 +7,8 @@ test = ["**/tests.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests/**/*.rs"]
 
 [tools.clippy]
 enabled = true
+profile = "axiom"
+check-docs = true
 targets = "all"
 features = "default"
 warnings = "deny"

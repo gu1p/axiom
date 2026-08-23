@@ -19,7 +19,7 @@ pub(super) fn source_location(
         .iter()
         .find(|source| source.relative_path == path)?;
     let start = location.byte_start.unwrap_or(0);
-    let end = location.byte_end.unwrap_or(start.saturating_add(1));
+    let end = location.byte_end.unwrap_or_else(|| start.saturating_add(1));
     let span = location.byte_start.map_or_else(
         || {
             source

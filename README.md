@@ -3,8 +3,8 @@
 [![CI](https://github.com/gu1p/axiom/actions/workflows/ci.yml/badge.svg)](https://github.com/gu1p/axiom/actions/workflows/ci.yml)
 [![Release](https://github.com/gu1p/axiom/actions/workflows/release.yml/badge.svg)](https://github.com/gu1p/axiom/actions/workflows/release.yml)
 
-Axiom is an executable-policy platform for Rust workspaces. It combines Clippy, source facts,
-rustc/HIR semantics, workspace reachability, and small declarative policies behind one
+Axiom is an executable-policy platform for Rust workspaces. It combines Clippy, rustdoc, source
+facts, rustc/HIR semantics, workspace reachability, and small declarative policies behind one
 compiler-like command.
 
 ## Usage
@@ -90,6 +90,8 @@ test = ["**/tests.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests/**/*.rs"]
 
 [tools.clippy]
 enabled = true
+profile = "axiom"
+check-docs = true
 targets = "all"
 features = "default"
 warnings = "deny"
@@ -149,6 +151,8 @@ is enabled even when `[tools.clippy]` is omitted and uses these defaults:
 ```toml
 [tools.clippy]
 enabled = true
+profile = "axiom"
+check-docs = true
 targets = "all"
 features = "default"
 no-default-features = false
@@ -156,9 +160,10 @@ warnings = "deny"
 ```
 
 The wrapped command uses `cargo clippy --workspace --locked --no-deps --keep-going`, adds
-`--all-targets` by default, and denies warnings. Configure individual lint levels in the
-workspace's `Cargo.toml` using Cargo's standard `[workspace.lints.clippy]` table. Axiom owns only
-execution coverage and whether warnings block the check.
+`--all-targets` by default, and denies warnings. The default `axiom` profile enables strict Rust
+lints, `clippy::all`, `clippy::cargo`, `clippy::pedantic`, selected restriction and nursery lints,
+and the documented low-signal exceptions. It also runs `cargo doc` with `rustdoc::all`. See the
+[complete built-in lint profile](docs/clippy-profile.md).
 
 For a workspace whose valid build needs selected features:
 
@@ -170,8 +175,11 @@ features = ["server", "postgres"]
 
 `targets` accepts `"all"` or `"default"`. `features` accepts `"default"`, `"all"`, or a list of
 feature names; combine a feature list with `no-default-features = true` when needed. `warnings`
-accepts `"deny"` or `"warn"`. Set `enabled = false` only when another required system owns Clippy
-execution. If the component is missing, install it with `rustup component add clippy`.
+accepts `"deny"` or `"warn"`. Set `check-docs = false` to skip rustdoc. Set
+`profile = "workspace"` to disable Axiom's built-in lint selections and use only lint levels from
+the workspace; execution coverage and the `warnings` policy still apply. Set `enabled = false`
+only when another required system owns Clippy execution. If the component is missing, install it
+with `rustup component add clippy`.
 
 `testing/separate-test-files` rejects inline `#[cfg(test)]` implementations and test-attributed
 functions in production files. External test module declarations remain valid, so private unit
@@ -242,9 +250,9 @@ musl-only host, disable semantic rules or run Axiom in a glibc environment.
 - Macro invocations are not expanded.
 
 JSON output is a deterministic document with `schema_version = 1`, an outcome, diagnostics, and a
-summary. Native diagnostics use `kind = "policy"`; wrapped Clippy diagnostics use `kind = "tool"`
-and `tool = "clippy"`. Span byte offsets are zero-based; line and Unicode-scalar columns are
-one-based.
+summary. Native diagnostics use `kind = "policy"`; wrapped compiler diagnostics use
+`kind = "tool"` and identify `tool = "clippy"` or `tool = "rustdoc"`. Span byte offsets are
+zero-based; line and Unicode-scalar columns are one-based.
 
 ## Architecture
 

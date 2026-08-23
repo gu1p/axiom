@@ -1,6 +1,6 @@
 use camino::Utf8PathBuf;
 use policy_core::{
-    AnalysisInput, CodebaseFacts, FactProvider, RustEdition, SourceUnit, TestCodeKind,
+    AnalysisInput, CodebaseFacts, FactProvider as _, RustEdition, SourceUnit, TestCodeKind,
 };
 
 use super::SyntaxFactProvider;

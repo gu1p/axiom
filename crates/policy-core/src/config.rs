@@ -7,8 +7,8 @@ use toml::Table;
 mod tools;
 
 pub use tools::{
-    ClippyConfig, ClippyFeatureMode, ClippyFeatureSelection, ClippyTargetCoverage,
-    ClippyWarningPolicy, ToolConfig,
+    ClippyConfig, ClippyFeatureMode, ClippyFeatureSelection, ClippyLintProfile,
+    ClippyTargetCoverage, ClippyWarningPolicy, ToolConfig,
 };
 
 #[derive(Debug, Clone, Deserialize)]

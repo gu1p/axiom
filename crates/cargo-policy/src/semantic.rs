@@ -3,6 +3,7 @@ mod hir;
 mod private_dead;
 mod types;
 
+use std::io::Write as _;
 use std::{env, fs, path::Path, process::Command};
 
 use policy_core::{AnalysisError, AnalysisInput, CodebaseFacts, FactProvider};
@@ -68,7 +69,10 @@ fn ensure_toolchain() -> Result<(), AnalysisError> {
             "Rust {SEMANTIC_TOOLCHAIN} with rustc-dev is required for semantic policies and AXIOM_OFFLINE is set; run `rustup toolchain install {SEMANTIC_TOOLCHAIN} --profile minimal --component rustc-dev`"
         )));
     }
-    eprintln!("installing Rust {SEMANTIC_TOOLCHAIN} with rustc-dev for Axiom semantic policies...");
+    let _ = writeln!(
+        std::io::stderr(),
+        "installing Rust {SEMANTIC_TOOLCHAIN} with rustc-dev for Axiom semantic policies..."
+    );
     install_toolchain()
 }
 

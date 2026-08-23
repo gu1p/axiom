@@ -1,3 +1,5 @@
+//! Command-line frontend and orchestration for Axiom checks.
+
 mod args;
 mod check;
 mod init;
@@ -7,7 +9,7 @@ mod tools;
 
 use std::{ffi::OsString, process::ExitCode};
 
-use clap::Parser;
+use clap::Parser as _;
 
 pub const VERSION: &str = match option_env!("AXIOM_VERSION") {
     Some(version) => version,

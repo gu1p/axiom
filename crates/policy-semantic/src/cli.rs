@@ -1,18 +1,18 @@
+use core::fmt::Write as _;
+use core::hash::{Hash as _, Hasher as _};
+use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
-use std::hash::{Hash, Hasher};
 use std::io::{BufReader, PipeReader, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus, Stdio};
-use std::time::Duration;
 
 use anstyle::Style;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 use cargo_metadata::{DependencyKind, MetadataCommand, Target, TargetKind};
-use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap::{ArgMatches, CommandFactory as _, FromArgMatches as _, Parser, Subcommand, ValueEnum};
 use tempfile::NamedTempFile;
 
 use crate::config::{
@@ -343,7 +343,8 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         .command;
     debug_assert_eq!(
         lint_levels.overrides.len(),
-        args.allow.len() + args.warn.len() + args.deny.len()
+        args.allow.len() + args.warn.len() + args.deny.len(),
+        "every CLI lint override must be retained"
     );
     let metadata = MetadataCommand::new()
         .manifest_path(&args.manifest_path)
@@ -497,21 +498,17 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         .with_context(|| format!("create target directory {}", target_dir.display()))?;
 
     let temporary_graph_dir;
-    let graph_dir = match &args.graph_dir {
-        Some(path) => {
-            fs::create_dir_all(path)
-                .with_context(|| format!("create graph directory {}", path.display()))?;
-            tempfile::Builder::new()
-                .prefix("run-")
-                .tempdir_in(path)
-                .with_context(|| format!("create graph run directory {}", path.display()))?
-                .keep()
-        }
-        None => {
-            temporary_graph_dir =
-                tempfile::tempdir().context("create temporary graph directory")?;
-            temporary_graph_dir.path().to_path_buf()
-        }
+    let graph_dir = if let Some(path) = &args.graph_dir {
+        fs::create_dir_all(path)
+            .with_context(|| format!("create graph directory {}", path.display()))?;
+        tempfile::Builder::new()
+            .prefix("run-")
+            .tempdir_in(path)
+            .with_context(|| format!("create graph run directory {}", path.display()))?
+            .keep()
+    } else {
+        temporary_graph_dir = tempfile::tempdir().context("create temporary graph directory")?;
+        temporary_graph_dir.path().to_path_buf()
     };
     let run_id = graph_dir
         .file_name()
@@ -540,7 +537,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                 "--filter-platform".to_owned(),
                 args.target
                     .as_deref()
-                    .unwrap_or(toolchain.host())
+                    .unwrap_or_else(|| toolchain.host())
                     .to_owned(),
             ]);
         feature_profile.configure_metadata(&mut metadata_command);
@@ -685,8 +682,9 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                     "visibility fixes made no progress after {fix_iteration} iteration(s); the same fix plan was produced after re-analysis"
                 );
             }
-            let mut applied_fixes = false;
-            if !test_fix_plan.targets.is_empty() {
+            let test_fixes_applied = if test_fix_plan.targets.is_empty() {
+                false
+            } else {
                 let fix_packages = fix_packages(&metadata, &test_fix_plan)?;
                 let fix_plan_path = graph_dir.join(format!("test-fix-plan-{fix_iteration}"));
                 write_fix_plan(&fix_plan_path, &test_emission_plan)?;
@@ -700,9 +698,11 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                     },
                     profile_graph.feature_profile,
                 )?;
-                applied_fixes = true;
-            }
-            if !production_fix_plan.targets.is_empty() {
+                true
+            };
+            let production_fixes_applied = if production_fix_plan.targets.is_empty() {
+                false
+            } else {
                 let fix_packages = fix_packages(&metadata, &production_fix_plan)?;
                 let fix_plan_path = graph_dir.join(format!("production-fix-plan-{fix_iteration}"));
                 write_fix_plan(&fix_plan_path, &production_emission_plan)?;
@@ -712,14 +712,14 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                     CargoInvocation::FixProduction {
                         plan: &fix_plan_path,
                         packages: &fix_packages,
-                        allow_dirty: fix_iteration > 0 || applied_fixes,
+                        allow_dirty: fix_iteration > 0 || test_fixes_applied,
                     },
                     profile_graph.feature_profile,
                 )?;
-                applied_fixes = true;
-            }
+                true
+            };
             debug_assert!(
-                applied_fixes,
+                test_fixes_applied || production_fixes_applied,
                 "a non-empty fix plan applies at least one mode"
             );
             fix_iteration += 1;
@@ -844,7 +844,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                 "schema_version": 5,
                 "summary": {
                     "diagnostic_count": diagnostic_count,
-                    "target": args.target.as_deref().unwrap_or(toolchain.host()),
+                    "target": args.target.as_deref().unwrap_or_else(|| toolchain.host()),
                     "production": production_products
                         .iter()
                         .map(|product| match product.product {
@@ -1230,7 +1230,7 @@ impl CargoOutputCapture {
 #[cfg(unix)]
 fn cargo_output_pending(reader: &PipeReader) -> std::io::Result<usize> {
     usize::try_from(rustix::io::ioctl_fionread(reader)?)
-        .map_err(|_| std::io::Error::other("pending Cargo output exceeds usize"))
+        .map_err(|_overflow| std::io::Error::other("pending Cargo output exceeds usize"))
 }
 
 /// Returns the bytes immediately readable from Cargo's pipe without waiting for inherited writers.
@@ -1383,9 +1383,12 @@ impl InstrumentedCargo<'_> {
             .arg(self.args.color.cargo_value());
         feature_profile.configure_cargo(&mut command);
         self.toolchain.configure_command(&mut command)?;
-        command
-            .arg("--target")
-            .arg(self.args.target.as_deref().unwrap_or(self.toolchain.host()));
+        command.arg("--target").arg(
+            self.args
+                .target
+                .as_deref()
+                .unwrap_or_else(|| self.toolchain.host()),
+        );
         if let Some(fix) = fix {
             if self.args.allow_dirty || fix.allow_dirty {
                 command.arg("--allow-dirty");
@@ -1574,7 +1577,11 @@ impl InstrumentedCargo<'_> {
                 fragment.package_name == product.package
                     && fragment.crate_name == crate_name
                     && fragment.compilation_target
-                        == self.args.target.as_deref().unwrap_or(self.toolchain.host())
+                        == self
+                            .args
+                            .target
+                            .as_deref()
+                            .unwrap_or_else(|| self.toolchain.host())
                     && fragment.product_root_kind != Some(protocol::ProductionTargetKind::Binary)
             }) {
                 // Other products can compile this library with different feature sets before
@@ -2078,7 +2085,9 @@ fn production_workspace_packages(
     }
 
     let mut root_components = vec![true; components.len()];
-    for (&package, dependents) in &incoming {
+    let mut ordered_incoming: Vec<_> = incoming.iter().collect();
+    ordered_incoming.sort_unstable_by_key(|(package, _)| **package);
+    for (&package, dependents) in ordered_incoming {
         let component = component_by_package[package];
         if dependents
             .iter()
@@ -2316,7 +2325,7 @@ fn clear_fragments(graph_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use core::cell::Cell;
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -2326,7 +2335,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
-    use clap::CommandFactory;
+    use clap::CommandFactory as _;
 
     use crate::config::ConfigDiagnosticKind;
     use crate::graph::{

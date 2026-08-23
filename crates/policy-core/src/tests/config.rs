@@ -51,6 +51,8 @@ fn clippy_is_enabled_with_strict_workspace_defaults() {
     let config = load("version = 1").expect("default configuration");
 
     assert!(config.tools.clippy.enabled);
+    assert!(config.tools.clippy.uses_axiom_profile());
+    assert!(config.tools.clippy.check_docs);
     assert!(config.tools.clippy.checks_all_targets());
     assert!(!config.tools.clippy.checks_all_features());
     assert!(!config.tools.clippy.no_default_features);
@@ -65,12 +67,16 @@ fn parses_clippy_coverage_and_rejects_conflicting_features() {
 
 [tools.clippy]
 enabled = true
+profile = "workspace"
+check-docs = false
 targets = "default"
 features = ["server", "postgres"]
 warnings = "warn"
 "#,
     )
     .expect("custom Clippy configuration");
+    assert!(!config.tools.clippy.uses_axiom_profile());
+    assert!(!config.tools.clippy.check_docs);
     assert!(!config.tools.clippy.checks_all_targets());
     assert_eq!(
         config.tools.clippy.selected_features(),

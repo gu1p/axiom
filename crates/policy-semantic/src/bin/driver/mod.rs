@@ -1,14 +1,14 @@
+use core::hash::Hasher as _;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fs::File;
-use std::hash::Hasher;
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 use rustc_ast as ast;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_errors::Applicability;
@@ -31,7 +31,7 @@ use rustc_session::lint::Level;
 use rustc_span::Symbol;
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
-use rustc_span::{BytePos, FileName, Pos};
+use rustc_span::{BytePos, FileName, Pos as _};
 
 use crate::protocol;
 use policy_semantic::graph::{
@@ -48,7 +48,7 @@ pub(crate) fn is_protocol_version_query(args: &[String]) -> bool {
 }
 
 pub(crate) fn print_protocol_version() -> ExitCode {
-    println!("{}", protocol::VERSION);
+    let _ = writeln!(io::stdout(), "{}", protocol::VERSION);
     ExitCode::SUCCESS
 }
 
@@ -62,14 +62,14 @@ pub(crate) fn run_wrapper(mut args: Vec<String>) -> ExitCode {
     let (consumer_mode, run_id, workspace_root) = match validate_frontend_protocol() {
         Ok(protocol) => protocol,
         Err(error) => {
-            eprintln!("hawk: {error:#}");
+            let _ = writeln!(io::stderr(), "hawk: {error:#}");
             return ExitCode::FAILURE;
         }
     };
     let source_paths = match SourcePathNormalizer::new(&workspace_root) {
         Ok(source_paths) => source_paths,
         Err(error) => {
-            eprintln!("hawk: {error:#}");
+            let _ = writeln!(io::stderr(), "hawk: {error:#}");
             return ExitCode::FAILURE;
         }
     };
@@ -86,7 +86,7 @@ pub(crate) fn run_wrapper(mut args: Vec<String>) -> ExitCode {
         match parse_collection_options(env::var_os(protocol::COLLECTION_OPTIONS_ENV).as_deref()) {
             Ok(collection_options) => collection_options,
             Err(error) => {
-                eprintln!("hawk: invalid collection options: {error:#}");
+                let _ = writeln!(io::stderr(), "hawk: invalid collection options: {error:#}");
                 return ExitCode::FAILURE;
             }
         };
@@ -97,7 +97,7 @@ pub(crate) fn run_wrapper(mut args: Vec<String>) -> ExitCode {
     {
         Ok(fix_plan) => fix_plan,
         Err(error) => {
-            eprintln!("hawk: could not read fix plan: {error:#}");
+            let _ = writeln!(io::stderr(), "hawk: could not read fix plan: {error:#}");
             return ExitCode::FAILURE;
         }
     };
@@ -305,7 +305,7 @@ fn emit_fixes(tcx: TyCtxt<'_>, fix_plan: &FixPlan) {
         }
     }
 
-    let mut grouped_fixes = HashMap::new();
+    let mut grouped_fixes = std::collections::BTreeMap::new();
     for (span, kind) in visibility_fixes {
         grouped_fixes
             .entry((source_span(tcx, span), span.hi() - span.lo()))
@@ -437,14 +437,16 @@ fn emit_fragment(
     let suffix = crate_id.to_string();
     let fragment = collect_fragment(
         tcx,
-        package_name,
-        crate_name.clone(),
-        crate_id,
-        classification.is_product_root,
-        classification.root_kind,
-        classification.test_surface,
-        classification.non_production_consumer,
-        collection_options,
+        FragmentContext {
+            package_name,
+            crate_name: crate_name.clone(),
+            crate_id,
+            is_product_root: classification.is_product_root,
+            root_kind: classification.root_kind,
+            test_surface: classification.test_surface,
+            non_production_consumer: classification.non_production_consumer,
+            collection_options,
+        },
     );
     let mut file = tempfile::NamedTempFile::new_in(output_dir)
         .with_context(|| format!("create temporary fragment in {}", output_dir.display()))?;
@@ -527,8 +529,7 @@ fn write_fragment(writer: impl Write, fragment: &Fragment, path: &Path) -> Resul
     Ok(writer.get_ref().fingerprint())
 }
 
-fn collect_fragment(
-    tcx: TyCtxt<'_>,
+struct FragmentContext {
     package_name: String,
     crate_name: String,
     crate_id: DefinitionId,
@@ -537,7 +538,19 @@ fn collect_fragment(
     test_surface: bool,
     non_production_consumer: bool,
     collection_options: CollectionOptions,
-) -> Fragment {
+}
+
+fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
+    let FragmentContext {
+        package_name,
+        crate_name,
+        crate_id,
+        is_product_root,
+        root_kind,
+        test_surface,
+        non_production_consumer,
+        collection_options,
+    } = context;
     let mut definitions = Vec::new();
     let mut defined = HashSet::new();
     let mut adt_members = Vec::new();
@@ -970,9 +983,9 @@ fn is_public_candidate_with_visibility(
 }
 
 fn visibility_modifier(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<String> {
-    visibility_span(tcx, def_id)
-        .and_then(|span| tcx.sess.source_map().span_to_snippet(span).ok())
-        .and_then(|visibility| compact_visibility_modifier(&visibility))
+    let visibility = visibility_span(tcx, def_id)
+        .and_then(|span| tcx.sess.source_map().span_to_snippet(span).ok())?;
+    compact_visibility_modifier(&visibility)
 }
 
 fn uniform_field_group<T>(
@@ -1027,14 +1040,13 @@ fn source_uniform_field_count(tcx: TyCtxt<'_>, item_span: rustc_span::Span) -> O
         ast::ItemKind::Struct(_, _, data) | ast::ItemKind::Union(_, _, data) => data.fields(),
         _ => return None,
     };
-    let mut visibilities = fields.iter().map(|field| match field.vis.kind {
-        ast::VisibilityKind::Inherited => Some(String::new()),
-        _ => tcx
-            .sess
-            .source_map()
-            .span_to_snippet(field.vis.span)
-            .ok()
-            .and_then(|visibility| compact_visibility_modifier(&visibility)),
+    let mut visibilities = fields.iter().map(|field| {
+        if matches!(field.vis.kind, ast::VisibilityKind::Inherited) {
+            Some(String::new())
+        } else {
+            let visibility = tcx.sess.source_map().span_to_snippet(field.vis.span).ok()?;
+            compact_visibility_modifier(&visibility)
+        }
     });
     let Some(Some(first)) = visibilities.next() else {
         return None;
@@ -1409,7 +1421,7 @@ fn source_file_path(tcx: TyCtxt<'_>, name: &FileName) -> String {
         .opts
         .working_dir
         .local_path()
-        .unwrap_or(Path::new(""));
+        .unwrap_or_else(|| Path::new(""));
     // The local physical path keeps identity on the real file and leaves the
     // path loadable by the diagnostic renderer.
     if let FileName::Real(name) = name
@@ -1592,8 +1604,8 @@ impl<'tcx> Visitor<'tcx> for ReferenceVisitor<'tcx> {
 
     fn visit_expr(&mut self, expression: &'tcx hir::Expr<'tcx>) {
         if let Some(typeck_results) = self.typeck_results {
-            match expression.kind {
-                hir::ExprKind::Path(ref qpath @ hir::QPath::TypeRelative(..)) => {
+            match &expression.kind {
+                hir::ExprKind::Path(qpath @ hir::QPath::TypeRelative(..)) => {
                     self.record(typeck_results.qpath_res(qpath, expression.hir_id));
                 }
                 hir::ExprKind::Struct(qpath, fields, tail) => {
@@ -1604,7 +1616,7 @@ impl<'tcx> Visitor<'tcx> for ReferenceVisitor<'tcx> {
                     if let Some(adt) = typeck_results.expr_ty(expression).ty_adt_def()
                         && !adt.is_enum()
                     {
-                        for field in fields {
+                        for field in *fields {
                             self.record_non_enum_field(adt, field.hir_id);
                         }
                         if !matches!(tail, hir::StructTailExpr::None) {
@@ -1645,20 +1657,20 @@ impl<'tcx> Visitor<'tcx> for ReferenceVisitor<'tcx> {
 
     fn visit_pat(&mut self, pattern: &'tcx hir::Pat<'tcx>) {
         if let Some(typeck_results) = self.typeck_results {
-            match pattern.kind {
-                hir::PatKind::Struct(ref qpath, fields, _) => {
+            match &pattern.kind {
+                hir::PatKind::Struct(qpath, fields, _) => {
                     if matches!(qpath, hir::QPath::TypeRelative(..)) {
                         self.record(typeck_results.qpath_res(qpath, pattern.hir_id));
                     }
                     if let Some(adt) = typeck_results.pat_ty(pattern).ty_adt_def()
                         && !adt.is_enum()
                     {
-                        for field in fields {
+                        for field in *fields {
                             self.record_non_enum_field(adt, field.hir_id);
                         }
                     }
                 }
-                hir::PatKind::TupleStruct(ref qpath, ..)
+                hir::PatKind::TupleStruct(qpath, ..)
                     if matches!(qpath, hir::QPath::TypeRelative(..)) =>
                 {
                     self.record(typeck_results.qpath_res(qpath, pattern.hir_id));
@@ -1671,8 +1683,7 @@ impl<'tcx> Visitor<'tcx> for ReferenceVisitor<'tcx> {
 
     fn visit_pat_expr(&mut self, expression: &'tcx hir::PatExpr<'tcx>) {
         if let Some(typeck_results) = self.typeck_results
-            && let hir::PatExprKind::Path(ref qpath @ hir::QPath::TypeRelative(..)) =
-                expression.kind
+            && let hir::PatExprKind::Path(qpath @ hir::QPath::TypeRelative(..)) = &expression.kind
         {
             self.record(typeck_results.qpath_res(qpath, expression.hir_id));
         }
@@ -1682,7 +1693,7 @@ impl<'tcx> Visitor<'tcx> for ReferenceVisitor<'tcx> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use core::cell::Cell;
     use std::collections::HashSet;
     use std::ffi::OsStr;
     use std::io::{self, Write};
@@ -1976,7 +1987,7 @@ mod tests {
             },
         ];
 
-        let targets = type_alias_interface_targets(&edges, &[alias].into_iter().collect());
+        let targets = type_alias_interface_targets(&edges, &core::iter::once(alias).collect());
         assert_eq!(targets.len(), 1);
         assert_eq!(targets.get(&alias), Some(&vec![target]));
         assert!(type_alias_interface_targets(&edges, &HashSet::new()).is_empty());

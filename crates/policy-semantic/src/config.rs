@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 use cargo_metadata::{CargoOpt, MetadataCommand};
 use cargo_platform::{Cfg, Platform};
 use serde::Deserialize;
@@ -1017,11 +1017,10 @@ impl ProductionConsumer {
 fn config_span(source: &str, offset: usize) -> ConfigSpan {
     let prefix = &source[..offset];
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
-    let column = prefix
-        .rsplit_once('\n')
-        .map_or(prefix.chars().count() + 1, |(_, line)| {
-            line.chars().count() + 1
-        });
+    let column = prefix.rsplit_once('\n').map_or_else(
+        || prefix.chars().count() + 1,
+        |(_, line)| line.chars().count() + 1,
+    );
     ConfigSpan { line, column }
 }
 

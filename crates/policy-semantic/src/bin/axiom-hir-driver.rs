@@ -1,3 +1,5 @@
+//! Private compiler driver used by Axiom's semantic analyzer.
+
 #![feature(rustc_private)]
 
 extern crate rustc_ast;
@@ -12,6 +14,8 @@ extern crate rustc_parse;
 extern crate rustc_session;
 extern crate rustc_span;
 
+use std::io::Write as _;
+
 use policy_semantic::protocol;
 
 mod driver;
@@ -21,7 +25,10 @@ fn main() -> std::process::ExitCode {
         .map(std::ffi::OsString::into_string)
         .collect()
     else {
-        eprintln!("hawk: command-line arguments must be valid UTF-8");
+        let _ = writeln!(
+            std::io::stderr(),
+            "hawk: command-line arguments must be valid UTF-8"
+        );
         return std::process::ExitCode::FAILURE;
     };
     if driver::is_protocol_version_query(&args) {
@@ -29,7 +36,10 @@ fn main() -> std::process::ExitCode {
     } else if driver::is_wrapper_invocation(&args) {
         driver::run_wrapper(args)
     } else {
-        eprintln!("axiom: axiom-hir-driver is an internal compiler wrapper");
+        let _ = writeln!(
+            std::io::stderr(),
+            "axiom: axiom-hir-driver is an internal compiler wrapper"
+        );
         std::process::ExitCode::FAILURE
     }
 }

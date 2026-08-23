@@ -5,7 +5,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 
 use crate::protocol;
 
@@ -194,7 +194,8 @@ pub(crate) fn run_rustc_probe(args: &[String]) -> Option<ExitCode> {
         // Never truncate an existing path, even if every other probe signal appears valid.
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return None,
         Err(error) => {
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "hawk: could not create Cargo rustc probe result {}: {error}",
                 output_path.display()
             );
@@ -204,7 +205,8 @@ pub(crate) fn run_rustc_probe(args: &[String]) -> Option<ExitCode> {
     if let Err(error) = fs::remove_file(&marker_path) {
         drop(output);
         let _ = fs::remove_file(&output_path);
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "hawk: could not consume Cargo rustc probe marker {}: {error}",
             marker_path.display()
         );
@@ -222,7 +224,7 @@ pub(crate) fn run_rustc_probe(args: &[String]) -> Option<ExitCode> {
     if let Err(error) = write_result {
         drop(output);
         let _ = fs::remove_file(&output_path);
-        eprintln!("hawk: {error:#}");
+        let _ = writeln!(std::io::stderr(), "hawk: {error:#}");
     }
     Some(ExitCode::FAILURE)
 }

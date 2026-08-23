@@ -1,4 +1,5 @@
-use std::{fs::OpenOptions, io::Write};
+use std::fs::OpenOptions;
+use std::io::{self, Write as _};
 
 use policy_cargo::Workspace;
 
@@ -13,6 +14,8 @@ test = ["**/tests.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests/**/*.rs"]
 
 [tools.clippy]
 enabled = true
+profile = "axiom"
+check-docs = true
 targets = "all"
 features = "default"
 warnings = "deny"
@@ -78,7 +81,7 @@ pub fn run(options: &InitOptions) -> u8 {
     let workspace = match Workspace::discover(options.manifest_path.as_deref()) {
         Ok(workspace) => workspace,
         Err(error) => {
-            eprintln!("error: {error}");
+            let _ = writeln!(io::stderr(), "error: {error}");
             return 2;
         }
     };
@@ -86,7 +89,7 @@ pub fn run(options: &InitOptions) -> u8 {
     let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(file) => file,
         Err(error) => {
-            eprintln!("error: could not create {path}: {error}");
+            let _ = writeln!(io::stderr(), "error: could not create {path}: {error}");
             return 2;
         }
     };
@@ -99,9 +102,9 @@ pub fn run(options: &InitOptions) -> u8 {
         .write_all(BASE_CONFIG.as_bytes())
         .and_then(|()| file.write_all(semantic.as_bytes()))
     {
-        eprintln!("error: could not write {path}: {error}");
+        let _ = writeln!(io::stderr(), "error: could not write {path}: {error}");
         return 2;
     }
-    println!("created {path}");
+    let _ = writeln!(io::stdout(), "created {path}");
     0
 }

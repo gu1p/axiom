@@ -1,5 +1,6 @@
+use core::fmt::{self, Display, Formatter, Write as _};
+use core::iter;
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Display, Formatter, Write as _};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,7 +30,7 @@ struct CachedSource {
 
 impl CachedSource {
     fn new(source: String) -> Self {
-        let line_starts = std::iter::once(0)
+        let line_starts = iter::once(0)
             .chain(
                 source
                     .bytes()
@@ -88,7 +89,7 @@ where
         finding: &Finding<'_>,
         production_description: &str,
         level: LintLevel,
-    ) -> std::fmt::Result {
+    ) -> fmt::Result {
         let source_line = finding
             .definition
             .span
@@ -109,7 +110,7 @@ where
         diagnostic: &ConfigDiagnostic<'_>,
         config: &Config,
         level: LintLevel,
-    ) -> std::fmt::Result {
+    ) -> fmt::Result {
         write_config_diagnostic(
             &mut self.output,
             diagnostic,
@@ -125,7 +126,7 @@ where
         diagnostic_counts: &BTreeMap<&str, BTreeMap<&str, usize>>,
         production_summary: &str,
         compilation_target: &str,
-    ) -> std::fmt::Result {
+    ) -> fmt::Result {
         writeln!(
             self.output,
             "hawk: {diagnostic_count} finding(s) for {production_summary} and workspace non-production targets on {compilation_target}"
@@ -169,7 +170,7 @@ fn write_diagnostic(
     production_description: &str,
     source_line: Option<&str>,
     level: LintLevel,
-) -> std::fmt::Result {
+) -> fmt::Result {
     let dead_reachability_source = if finding.test_compiled_only {
         "any workspace test"
     } else {
@@ -371,7 +372,7 @@ fn write_config_diagnostic(
     config: &Config,
     workspace_root: &Path,
     level: LintLevel,
-) -> std::fmt::Result {
+) -> fmt::Result {
     let (message, marker, help) = match *diagnostic {
         ConfigDiagnostic::UnknownItem(entry) => {
             let item = format!("{}::{}", entry.crate_name, entry.item);
@@ -453,7 +454,7 @@ fn write_diagnostic_header(
     code: &str,
     message: impl Display,
     level: LintLevel,
-) -> std::fmt::Result {
+) -> fmt::Result {
     writeln!(
         output,
         "{}: {}",
@@ -470,7 +471,7 @@ fn write_annotated_location(
     source_line: Option<&str>,
     marker: &str,
     marker_style: Style,
-) -> Result<usize, std::fmt::Error> {
+) -> Result<usize, fmt::Error> {
     writeln!(
         output,
         "  {} {file}:{line}:{column}",
@@ -513,7 +514,7 @@ pub(crate) fn styled(content: impl Display, style: Style) -> impl Display {
     }
 
     impl<T: Display> Display for Styled<T> {
-        fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
             write!(
                 formatter,
                 "{}{}{}",

@@ -1,5 +1,8 @@
+use core::fmt::{self, Display, Formatter};
+use core::hash::BuildHasher;
+use core::iter;
+use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::fmt::{self, Display, Formatter};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
@@ -184,7 +187,7 @@ pub enum DefinitionKind {
     Other,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Span {
     pub file: String,
@@ -410,12 +413,16 @@ impl<'a> AuditedFragments<'a> {
     }
 }
 
-pub fn analyze<'a>(
+pub fn analyze<'a, CandidateHasher, ExcludedHasher>(
     production_fragments: &'a [Fragment],
     test_fragments: &'a [Fragment],
-    candidate_crates: &std::collections::HashSet<String>,
-    excluded_crates: &std::collections::HashSet<String>,
-) -> Vec<Finding<'a>> {
+    candidate_crates: &HashSet<String, CandidateHasher>,
+    excluded_crates: &HashSet<String, ExcludedHasher>,
+) -> Vec<Finding<'a>>
+where
+    CandidateHasher: BuildHasher,
+    ExcludedHasher: BuildHasher,
+{
     analyze_with_options(
         production_fragments,
         test_fragments,
@@ -425,13 +432,17 @@ pub fn analyze<'a>(
     )
 }
 
-pub fn analyze_with_options<'a>(
+pub fn analyze_with_options<'a, CandidateHasher, ExcludedHasher>(
     production_fragments: &'a [Fragment],
     test_fragments: &'a [Fragment],
-    candidate_crates: &std::collections::HashSet<String>,
-    excluded_crates: &std::collections::HashSet<String>,
+    candidate_crates: &HashSet<String, CandidateHasher>,
+    excluded_crates: &HashSet<String, ExcludedHasher>,
     preserve_uniform_field_visibility: bool,
-) -> Vec<Finding<'a>> {
+) -> Vec<Finding<'a>>
+where
+    CandidateHasher: BuildHasher,
+    ExcludedHasher: BuildHasher,
+{
     let audited_fragments = AuditedFragments::new(production_fragments, test_fragments);
     let observed_definitions: Vec<&Definition> = production_fragments
         .iter()
@@ -569,7 +580,7 @@ pub fn analyze_with_options<'a>(
                     .zip(definition_crate_ids.get(&edge.to))
                     .is_some_and(|(source, target)| source != target)
         })
-        .flat_map(|edge| std::iter::once(edge.to).chain(equivalents.group(edge.to).iter().copied()))
+        .flat_map(|edge| iter::once(edge.to).chain(equivalents.group(edge.to).iter().copied()))
         .filter(|target| library_root_definition_ids.contains(target));
     let production_roots = production_fragments
         .iter()
@@ -1129,7 +1140,7 @@ fn is_live(
     equivalents: &EquivalenceGroups,
 ) -> bool {
     let equivalent_ids = equivalents.group(definition.id).iter().copied();
-    let ids = std::iter::once(definition.id).chain(equivalent_ids);
+    let ids = iter::once(definition.id).chain(equivalent_ids);
     if definition.kind == DefinitionKind::Reexport {
         ids.flat_map(|id| reexport_targets.get(&id).into_iter().flatten().copied())
             .any(|target| reachable.contains(&target))
@@ -1227,7 +1238,9 @@ fn equivalent_definitions<'a>(
 ) -> (EquivalenceGroups, EquivalenceGroups) {
     let mut groups: FxHashMap<SourceDefinitionIdentity<'a>, Vec<(DefinitionId, usize)>> =
         FxHashMap::default();
-    for definition in definitions.values() {
+    let mut ordered_definitions: Vec<_> = definitions.values().copied().collect();
+    ordered_definitions.sort_unstable_by_key(|definition| definition.id);
+    for definition in ordered_definitions {
         let Some(identity) =
             source_definition_identity(definition, definition_fragments[&definition.id])
         else {
@@ -1407,7 +1420,7 @@ mod tests {
     fn definition_ids_are_compact_and_round_trip() {
         let id = DefinitionId::new(0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210);
 
-        assert_eq!(std::mem::size_of::<DefinitionId>(), 16);
+        assert_eq!(core::mem::size_of::<DefinitionId>(), 16);
         assert_eq!(id.to_string(), "0123456789abcdeffedcba9876543210");
 
         let serialized = serde_json::to_string(&id).expect("serialize definition ID");
@@ -3381,7 +3394,10 @@ mod tests {
         for definition in &mut input[1].definitions {
             definition.expansion_span = Some(expansion(4, 12));
         }
-        let duplicate = input[1].definitions.pop().unwrap();
+        let duplicate = input[1]
+            .definitions
+            .pop()
+            .expect("fixture has a definition to duplicate");
         input.push(Fragment {
             protocol_version: ProtocolVersion,
             package_name: "lib".into(),

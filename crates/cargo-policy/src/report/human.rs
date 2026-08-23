@@ -1,9 +1,11 @@
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal as _};
 
 use policy_core::{AnalysisError, AnalysisInput, Diagnostic, Level, SourceSpan, SourceUnit};
 
 use crate::args::ColorChoice;
 use crate::tools::{ToolDiagnostic, ToolReport};
+
+use super::output::{stderr_line, stderr_write};
 
 pub fn check(
     diagnostics: &[Diagnostic],
@@ -30,12 +32,15 @@ fn policy_diagnostics(diagnostics: &[Diagnostic], input: &AnalysisInput, color: 
             "error"
         };
         let heading = paint(severity, severity_color(severity), color);
-        eprintln!("{heading}[{}]: {}", diagnostic.rule_id, diagnostic.message);
+        stderr_line(format_args!(
+            "{heading}[{}]: {}",
+            diagnostic.rule_id, diagnostic.message
+        ));
         location(&diagnostic.path, diagnostic.span, input, color);
         if let Some(limit) = diagnostic.limit {
-            eprintln!("  = limit: {limit} physical lines");
+            stderr_line(format_args!("  = limit: {limit} physical lines"));
         }
-        eprintln!("  = help: {}\n", diagnostic.help);
+        stderr_line(format_args!("  = help: {}\n", diagnostic.help));
     }
 }
 
@@ -69,23 +74,28 @@ fn summary(input: &AnalysisInput, tools: &[ToolReport], denied: usize, warned: u
             .collect::<Vec<_>>()
             .join(", ");
         if tools.is_empty() {
-            eprintln!("axiom check passed ({} Rust files)", input.sources.len());
+            stderr_line(format_args!(
+                "axiom check passed ({} Rust files)",
+                input.sources.len()
+            ));
         } else {
-            eprintln!(
+            stderr_line(format_args!(
                 "axiom check passed ({} Rust files; {tools} passed)",
                 input.sources.len()
-            );
+            ));
         }
     } else {
-        eprintln!("axiom check found {denied} error(s) and {warned} warning(s)");
+        stderr_line(format_args!(
+            "axiom check found {denied} error(s) and {warned} warning(s)"
+        ));
     }
 }
 
 fn tool_diagnostic(diagnostic: &ToolDiagnostic, input: &AnalysisInput, color: bool) {
     if let Some(rendered) = &diagnostic.rendered {
-        eprint!("{rendered}");
+        stderr_write(format_args!("{rendered}"));
         if !rendered.ends_with('\n') {
-            eprintln!();
+            stderr_line(format_args!(""));
         }
         return;
     }
@@ -95,38 +105,41 @@ fn tool_diagnostic(diagnostic: &ToolDiagnostic, input: &AnalysisInput, color: bo
         "error"
     };
     let heading = paint(severity, severity_color(severity), color);
-    eprintln!(
+    stderr_line(format_args!(
         "{heading}[{}::{}]: {}",
         diagnostic.tool, diagnostic.rule_id, diagnostic.message
-    );
+    ));
     if let (Some(path), Some(span)) = (&diagnostic.path, diagnostic.span) {
         location(path, span, input, color);
     } else if let Some(path) = &diagnostic.path {
-        eprintln!(" --> {path}");
+        stderr_line(format_args!(" --> {path}"));
     }
     if let Some(help) = &diagnostic.help {
-        eprintln!("  = help: {help}");
+        stderr_line(format_args!("  = help: {help}"));
     }
-    eprintln!();
+    stderr_line(format_args!(""));
 }
 
 pub fn operational(errors: &[AnalysisError], input: Option<&AnalysisInput>, choice: ColorChoice) {
     let color = color_enabled(choice);
     for error in errors {
         let heading = paint("error", "31", color);
-        eprintln!("{heading}[policy/tool]: {}", error.message);
+        stderr_line(format_args!("{heading}[policy/tool]: {}", error.message));
         if let (Some(path), Some(span), Some(input)) = (&error.path, error.span, input) {
             location(path, span, input, color);
         } else if let Some(path) = &error.path {
-            eprintln!(" --> {path}");
+            stderr_line(format_args!(" --> {path}"));
         }
-        eprintln!();
+        stderr_line(format_args!(""));
     }
-    eprintln!("axiom check could not complete");
+    stderr_line(format_args!("axiom check could not complete"));
 }
 
 fn location(path: &camino::Utf8Path, span: SourceSpan, input: &AnalysisInput, color: bool) {
-    eprintln!(" --> {path}:{}:{}", span.start.line, span.start.column);
+    stderr_line(format_args!(
+        " --> {path}:{}:{}",
+        span.start.line, span.start.column
+    ));
     let Some(source) = input
         .sources
         .iter()
@@ -149,15 +162,15 @@ fn snippet(source: &SourceUnit, span: SourceSpan, color: bool) {
     } else {
         1
     };
-    eprintln!(" {:gutter$} |", "", gutter = gutter);
-    eprintln!(" {number:gutter$} | {line}");
+    stderr_line(format_args!(" {:gutter$} |", "", gutter = gutter));
+    stderr_line(format_args!(" {number:gutter$} | {line}"));
     let marker = format!("{}{}", " ".repeat(start), "^".repeat(width));
-    eprintln!(
+    stderr_line(format_args!(
         " {:gutter$} | {}",
         "",
         paint(&marker, "31", color),
         gutter = gutter
-    );
+    ));
 }
 
 fn color_enabled(choice: ColorChoice) -> bool {

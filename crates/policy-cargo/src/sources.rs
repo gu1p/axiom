@@ -64,7 +64,10 @@ fn walk(root: &Utf8Path, target: &Utf8Path) -> ignore::Walk {
     builder.build()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "source discovery state is explicit"
+)]
 fn load_entry(
     entry: DirEntry,
     root: &Utf8Path,

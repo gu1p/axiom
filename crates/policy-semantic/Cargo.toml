@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license = "MIT OR Apache-2.0"
 description = "Axiom's workspace-aware semantic Rust analysis backend"
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [lib]
 name = "policy_semantic"

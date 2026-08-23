@@ -1,7 +1,7 @@
 use policy_core::{SourceUnit, TestCodeFact, TestCodeKind};
 use ra_ap_syntax::{
-    AstNode,
-    ast::{self, HasAttrs, HasName},
+    AstNode as _,
+    ast::{self, HasAttrs as _, HasName as _},
 };
 
 pub fn collect(source: &SourceUnit, root: &ra_ap_syntax::SyntaxNode) -> Vec<TestCodeFact> {

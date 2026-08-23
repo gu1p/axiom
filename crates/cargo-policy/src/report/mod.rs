@@ -1,5 +1,6 @@
 pub mod human;
 pub mod json;
+mod output;
 
 use policy_core::{AnalysisInput, Diagnostic};
 

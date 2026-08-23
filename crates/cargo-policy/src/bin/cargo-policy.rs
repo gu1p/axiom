@@ -1,3 +1,5 @@
+//! Cargo subcommand compatibility executable for Axiom.
+
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

@@ -1,3 +1,5 @@
+//! Shared facts, configuration, diagnostics, and execution primitives for Axiom.
+
 mod config;
 mod diagnostic;
 mod engine;
@@ -6,8 +8,8 @@ mod lines;
 mod registry;
 
 pub use config::{
-    ClippyConfig, ClippyFeatureMode, ClippyFeatureSelection, ClippyTargetCoverage,
-    ClippyWarningPolicy, PolicyConfig, SourceConfig, ToolConfig,
+    ClippyConfig, ClippyFeatureMode, ClippyFeatureSelection, ClippyLintProfile,
+    ClippyTargetCoverage, ClippyWarningPolicy, PolicyConfig, SourceConfig, ToolConfig,
 };
 pub use diagnostic::{Diagnostic, Level, Position, RuleClass, RuleMetadata, RuleScope, SourceSpan};
 pub use engine::{Engine, FactProvider, Rule};

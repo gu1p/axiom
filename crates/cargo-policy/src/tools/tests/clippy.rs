@@ -39,5 +39,13 @@ fn command_maps_clippy_configuration_to_cargo_arguments() {
             .any(|pair| pair == ["--features", "server,postgres"])
     );
     assert!(arguments.contains(&"--no-default-features".to_owned()));
-    assert!(!arguments.contains(&"-D".to_owned()));
+    assert!(!arguments.windows(2).any(|pair| pair == ["-D", "warnings"]));
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["-D", "unsafe-code"])
+    );
+    assert!(arguments.contains(&"clippy::pedantic".to_owned()));
+    assert!(arguments.contains(&"clippy::unwrap-used".to_owned()));
+    assert!(arguments.contains(&"clippy::cast-lossless".to_owned()));
 }

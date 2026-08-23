@@ -31,7 +31,10 @@ fn reports_the_compiled_version() {
 }
 
 fn oversized_function(lines: usize) -> String {
-    assert!(lines >= 2);
+    assert!(
+        lines >= 2,
+        "a function fixture needs opening and closing lines"
+    );
     let mut source = String::from("fn oversized() {\n");
     for _ in 0..lines - 2 {
         source.push_str("    work();\n");
@@ -198,7 +201,14 @@ fn source_exclusions_are_workspace_relative() {
     let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 50, 200);
     fs::write(
         workspace.root().join("policy.toml"),
-        "version = 1\n[sources]\ninclude = [\"**/*.rs\"]\nexclude = [\"src/**\"]\n",
+        concat!(
+            "version = 1\n",
+            "[sources]\n",
+            "include = [\"**/*.rs\"]\n",
+            "exclude = [\"src/**\"]\n",
+            "[tools.clippy]\n",
+            "enabled = false\n",
+        ),
     )
     .expect("excluded policy");
     let output = command(&workspace).output().expect("run cargo-policy");
@@ -259,6 +269,7 @@ exclude = []
 
 [tools.clippy]
 enabled = {enabled}
+check-docs = false
 targets = "all"
 warnings = "{}"
 "#,
@@ -307,4 +318,64 @@ fn clippy_warning_can_be_non_blocking_or_disabled() {
     let disabled = command(&workspace).output().expect("run without Clippy");
     assert!(disabled.status.success());
     assert!(String::from_utf8_lossy(&disabled.stderr).contains("axiom check passed"));
+}
+
+#[test]
+fn axiom_profile_enables_cherry_picked_clippy_lints() {
+    let workspace = TestWorkspace::new(
+        "//! Fixture docs.\npub fn debug_value() { dbg!(42); }\n",
+        "deny",
+        50,
+        200,
+    );
+    write_clippy_policy(&workspace, true, true);
+
+    let output = command(&workspace)
+        .args(["--format", "json"])
+        .output()
+        .expect("run Axiom Clippy profile");
+    assert_eq!(output.status.code(), Some(1));
+    let document: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert!(
+        document["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|item| item["rule_id"] == "clippy::dbg_macro")
+    );
+}
+
+#[test]
+fn axiom_profile_checks_rustdoc_lints() {
+    let workspace = TestWorkspace::new("pub fn answer() -> u8 { 42 }\n", "deny", 50, 200);
+    fs::write(
+        workspace.root().join("policy.toml"),
+        r#"version = 1
+
+[sources]
+include = ["**/*.rs"]
+exclude = []
+
+[tools.clippy]
+profile = "axiom"
+check-docs = true
+warnings = "deny"
+"#,
+    )
+    .expect("rustdoc policy");
+
+    let output = command(&workspace)
+        .args(["--format", "json"])
+        .output()
+        .expect("run rustdoc through Axiom");
+    assert_eq!(output.status.code(), Some(1));
+    let document: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert!(
+        document["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|item| item["tool"] == "rustdoc"
+                && item["rule_id"] == "rustdoc::missing_crate_level_docs")
+    );
 }
