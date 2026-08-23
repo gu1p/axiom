@@ -119,7 +119,7 @@ level = "warn"
 level = "warn"
 
 [rules."visibility/unnecessary-public"]
-level = "warn"
+level = "deny"
 
 [rules."visibility/unnecessary-restricted"]
 level = "warn"
@@ -145,7 +145,7 @@ code-oriented help:
 
 ```text
   = help: reduce the declaration to pub(crate)
-  = policy: rules."visibility/unnecessary-public".level = "warn" in policy.toml
+  = policy: rules."visibility/unnecessary-public".level = "deny" in policy.toml
   = configure: "deny" = error, "warn" = warning, "allow" = disabled
 ```
 

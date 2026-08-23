@@ -8,15 +8,15 @@ mod separate_test_files;
 
 use policy_core::{RuleRegistry, SemanticFindingKind};
 
-pub const FILE_MAX_LINES: &str = "size/file-max-lines";
-pub const FUNCTION_MAX_LINES: &str = "size/function-max-lines";
-pub const SEPARATE_TEST_FILES: &str = "testing/separate-test-files";
+const FILE_MAX_LINES: &str = "size/file-max-lines";
+const FUNCTION_MAX_LINES: &str = "size/function-max-lines";
+const SEPARATE_TEST_FILES: &str = "testing/separate-test-files";
 pub const PRIVATE_DEAD_CODE: &str = "dead-code/private";
-pub const DEAD_PUBLIC: &str = "dead-code/public";
-pub const TEST_ONLY: &str = "dead-code/test-only";
-pub const UNNECESSARY_PUBLIC: &str = "visibility/unnecessary-public";
-pub const UNNECESSARY_RESTRICTED: &str = "visibility/unnecessary-restricted";
-pub const UNNECESSARY_CRATE: &str = "visibility/unnecessary-crate";
+const DEAD_PUBLIC: &str = "dead-code/public";
+const TEST_ONLY: &str = "dead-code/test-only";
+const UNNECESSARY_PUBLIC: &str = "visibility/unnecessary-public";
+const UNNECESSARY_RESTRICTED: &str = "visibility/unnecessary-restricted";
+const UNNECESSARY_CRATE: &str = "visibility/unnecessary-crate";
 
 pub fn registry() -> RuleRegistry {
     let mut registry = RuleRegistry::default();
@@ -27,7 +27,7 @@ pub fn registry() -> RuleRegistry {
     registry
 }
 
-pub fn is_semantic_rule(id: &str) -> bool {
+fn is_semantic_rule(id: &str) -> bool {
     matches!(
         id,
         PRIVATE_DEAD_CODE

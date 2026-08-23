@@ -11,7 +11,7 @@ use std::{ffi::OsString, process::ExitCode};
 
 use clap::Parser as _;
 
-pub const VERSION: &str = match option_env!("AXIOM_VERSION") {
+const VERSION: &str = match option_env!("AXIOM_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };

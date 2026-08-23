@@ -45,7 +45,7 @@ level = "warn"
 level = "warn"
 
 [rules."visibility/unnecessary-public"]
-level = "warn"
+level = "deny"
 
 [rules."visibility/unnecessary-restricted"]
 level = "warn"
@@ -56,7 +56,7 @@ level = "warn"
 
 const LIBRARY_SEMANTIC_EXAMPLE: &str = r#"
 # Semantic analysis needs an explicit product boundary in a library-only workspace.
-# Uncomment and update this declaration and the warning rules below.
+# Uncomment and update this declaration and the semantic rules below.
 #
 # [[semantic.production]]
 # package = "my-package"
@@ -70,7 +70,7 @@ const LIBRARY_SEMANTIC_EXAMPLE: &str = r#"
 # [rules."dead-code/test-only"]
 # level = "warn"
 # [rules."visibility/unnecessary-public"]
-# level = "warn"
+# level = "deny"
 # [rules."visibility/unnecessary-restricted"]
 # level = "warn"
 # [rules."visibility/unnecessary-crate"]

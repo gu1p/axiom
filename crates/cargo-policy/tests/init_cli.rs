@@ -35,6 +35,7 @@ fn init_creates_the_default_policy_and_refuses_to_overwrite_it() {
     assert!(config.contains("warnings = \"deny\""));
     assert!(config.contains("[[semantic.production]]"));
     assert!(config.contains("# [rules.\"dead-code/public\"]"));
+    assert!(config.contains("# [rules.\"visibility/unnecessary-public\"]\n# level = \"deny\""));
 
     let second = init_command(&workspace)
         .output()
@@ -48,7 +49,7 @@ fn init_creates_the_default_policy_and_refuses_to_overwrite_it() {
 }
 
 #[test]
-fn init_enables_semantic_warnings_for_binary_workspaces() {
+fn init_enables_semantic_rules_for_binary_workspaces() {
     let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 99, 999);
     std::fs::write(workspace.root().join("src/main.rs"), "fn main() {}\n").expect("binary target");
     std::fs::remove_file(workspace.root().join("policy.toml")).expect("remove fixture policy");
@@ -60,6 +61,7 @@ fn init_enables_semantic_warnings_for_binary_workspaces() {
     let config =
         std::fs::read_to_string(workspace.root().join("policy.toml")).expect("initialized policy");
     assert!(config.contains("[rules.\"dead-code/private\"]\nlevel = \"warn\""));
+    assert!(config.contains("[rules.\"visibility/unnecessary-public\"]\nlevel = \"deny\""));
     assert!(config.contains("[rules.\"visibility/unnecessary-crate\"]"));
     assert!(!config.contains("[[semantic.production]]"));
 }

@@ -36,7 +36,7 @@ level = "warn"
 level = "warn"
 
 [rules."visibility/unnecessary-public"]
-level = "warn"
+level = "deny"
 
 [rules."visibility/unnecessary-restricted"]
 level = "warn"

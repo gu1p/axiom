@@ -14,7 +14,7 @@ pub use tools::{
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
-    pub version: u32,
+    version: u32,
     #[serde(default)]
     pub sources: SourceConfig,
     #[serde(default)]
