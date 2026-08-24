@@ -6,7 +6,7 @@ PROFILE ?=
 
 .DEFAULT_GOAL := build
 .NOTPARALLEL:
-.PHONY: build install check fmt-check lint test policy-check installer-check
+.PHONY: build install check fmt-check lint test semantic-driver policy-check installer-check
 
 build:
 	$(CARGO) build --workspace --all-targets --locked
@@ -52,11 +52,13 @@ fmt-check:
 lint:
 	$(CARGO) clippy --workspace --all-targets --locked -- -D warnings
 
-test:
+test: semantic-driver
 	$(CARGO) test --workspace --locked
 
-policy-check:
+semantic-driver:
 	$(CARGO) build --locked -p policy-semantic --bin axiom-hir-driver
+
+policy-check: semantic-driver
 	$(CARGO) run --locked -p cargo-policy -- check
 
 installer-check:

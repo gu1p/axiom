@@ -451,8 +451,8 @@ fn emit_fragment(
     let mut file = tempfile::NamedTempFile::new_in(output_dir)
         .with_context(|| format!("create temporary fragment in {}", output_dir.display()))?;
     let temporary_path = file.path().to_path_buf();
-    let fingerprint = write_fragment(file.as_file_mut(), &fragment, &temporary_path)?;
-    let path = output_dir.join(format!("{suffix}-{fingerprint:016x}.json"));
+    let _fingerprint = write_fragment(file.as_file_mut(), &fragment, &temporary_path)?;
+    let path = output_dir.join(format!("{suffix}.json"));
     file.persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("persist fragment {}", path.display()))?;

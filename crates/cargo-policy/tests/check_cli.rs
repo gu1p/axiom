@@ -1,6 +1,11 @@
 mod support;
 
-use std::{fs, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::SystemTime,
+};
 
 use serde_json::Value;
 use support::TestWorkspace;
@@ -23,13 +28,48 @@ fn command(workspace: &TestWorkspace) -> Command {
 
 fn assert_artifacts_are_temp_scoped(workspace: &TestWorkspace) {
     assert!(
-        workspace.root().join("axiom/cargo-target-v1").is_dir(),
-        "Axiom must create its Cargo artifact cache beneath TMPDIR"
+        workspace.root().join("axiom/cargo-target-v1").is_dir()
+            || workspace.root().join("axiom/semantic-target").is_dir(),
+        "Axiom must create its reusable artifact cache beneath TMPDIR"
     );
     assert!(
         !workspace.root().join("target").exists(),
         "Axiom must ignore an inherited Cargo target directory"
     );
+}
+
+fn semantic_fragments(root: &Path) -> Vec<(PathBuf, SystemTime)> {
+    fn visit(root: &Path, directory: &Path, fragments: &mut Vec<(PathBuf, SystemTime)>) {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, fragments);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .expect("semantic fragment modification time");
+                fragments.push((
+                    path.strip_prefix(root)
+                        .expect("fragment below semantic cache")
+                        .to_path_buf(),
+                    modified,
+                ));
+            }
+        }
+    }
+
+    let cache = root.join("axiom/semantic-target");
+    let mut fragments = Vec::new();
+    visit(&cache, &cache, &mut fragments);
+    fragments.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    fragments
 }
 
 #[test]
@@ -38,7 +78,12 @@ fn reports_the_compiled_version() {
         .arg("--version")
         .output()
         .expect("run axiom");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "axiom failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
         format!("axiom {}", env!("CARGO_PKG_VERSION"))
@@ -87,7 +132,10 @@ fn clean_workspace_passes_with_human_summary() {
     let output = command(&workspace).output().expect("run cargo-policy");
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("axiom check passed (1 Rust files)"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("axiom: checking policies..."));
+    assert!(stderr.contains("axiom: finished policies in "));
+    assert!(stderr.contains("axiom check passed (1 Rust files)"));
 }
 
 #[test]
@@ -276,7 +324,12 @@ level = "warn"
         .args(["--format", "json"])
         .output()
         .expect("run private dead-code policy");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "axiom failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let document: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     let diagnostics = document["diagnostics"].as_array().expect("diagnostics");
     assert_eq!(diagnostics.len(), 1);
@@ -287,6 +340,24 @@ level = "warn"
             .is_some_and(|message| message.contains("unused_private"))
     );
     assert_artifacts_are_temp_scoped(&workspace);
+
+    let first_fragments = semantic_fragments(workspace.root());
+    assert!(!first_fragments.is_empty());
+    let second = command(&workspace)
+        .args(["--format", "json"])
+        .output()
+        .expect("run warm private dead-code policy");
+    assert!(second.status.success());
+    let second_document: Value = serde_json::from_slice(&second.stdout).expect("valid warm JSON");
+    assert_eq!(
+        second_document["diagnostics"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        semantic_fragments(workspace.root()),
+        first_fragments,
+        "a warm semantic check must reuse cached compiler facts"
+    );
 }
 
 fn write_clippy_policy(workspace: &TestWorkspace, enabled: bool, deny_warnings: bool) {

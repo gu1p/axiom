@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use core::fmt::Write as _;
 use core::hash::{Hash as _, Hasher as _};
 use core::time::Duration;
@@ -11,7 +12,9 @@ use std::process::{Command, ExitCode, ExitStatus, Stdio};
 
 use anstyle::Style;
 use anyhow::{Context as _, Result, bail};
-use cargo_metadata::{DependencyKind, MetadataCommand, Target, TargetKind};
+use cargo_metadata::{
+    DependencyKind, Message, MetadataCommand, Target, TargetKind, diagnostic::DiagnosticLevel,
+};
 use clap::{ArgMatches, CommandFactory as _, FromArgMatches as _, Parser, Subcommand, ValueEnum};
 use tempfile::NamedTempFile;
 
@@ -30,10 +33,8 @@ use crate::toolchain::{
     validate_driver_protocol,
 };
 
-const AXIOM_BUILD_VERSION: &str = match option_env!("AXIOM_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+const SEMANTIC_CACHE_LAYOUT_VERSION: u32 = 3;
+const SEMANTIC_GRAPH_DIRECTORY: &str = "axiom-facts-v3";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -341,6 +342,9 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
     let Commands::Check(args) = Args::from_arg_matches(&matches)
         .context("read command-line arguments")?
         .command;
+    let private_dead_code_mode = env::var_os(protocol::PRIVATE_DEAD_CODE_ENV);
+    let collect_private_dead_code = private_dead_code_mode.is_some();
+    let private_dead_code_only = private_dead_code_mode.as_deref() == Some(OsStr::new("only"));
     debug_assert_eq!(
         lint_levels.overrides.len(),
         args.allow.len() + args.warn.len() + args.deny.len(),
@@ -394,6 +398,25 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
             })
             .collect::<Vec<_>>()
     };
+    if inferred_production_products.is_empty()
+        && !config.has_production_consumers()
+        && private_dead_code_only
+    {
+        inferred_production_products.extend(metadata.workspace_packages().into_iter().flat_map(
+            |package| {
+                package
+                    .targets
+                    .iter()
+                    .filter(|target| is_library_target(target))
+                    .map(|target| {
+                        (
+                            package.name.as_str(),
+                            ProductionProduct::Library(target.name.clone()),
+                        )
+                    })
+            },
+        ));
+    }
     inferred_production_products.sort_unstable_by(
         |(left_package, left_product), (right_package, right_product)| {
             left_package
@@ -497,24 +520,31 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
     fs::create_dir_all(&target_dir)
         .with_context(|| format!("create target directory {}", target_dir.display()))?;
 
-    let temporary_graph_dir;
-    let graph_dir = if let Some(path) = &args.graph_dir {
+    let (graph_dir, run_id) = if let Some(path) = &args.graph_dir {
         fs::create_dir_all(path)
             .with_context(|| format!("create graph directory {}", path.display()))?;
-        tempfile::Builder::new()
+        let graph_dir = tempfile::Builder::new()
             .prefix("run-")
             .tempdir_in(path)
             .with_context(|| format!("create graph run directory {}", path.display()))?
-            .keep()
+            .keep();
+        let run_id = graph_dir
+            .file_name()
+            .unwrap_or(graph_dir.as_os_str())
+            .to_string_lossy()
+            .into_owned();
+        (graph_dir, run_id)
     } else {
-        temporary_graph_dir = tempfile::tempdir().context("create temporary graph directory")?;
-        temporary_graph_dir.path().to_path_buf()
+        let graph_dir = target_dir.join(SEMANTIC_GRAPH_DIRECTORY);
+        fs::create_dir_all(&graph_dir)
+            .with_context(|| format!("create graph directory {}", graph_dir.display()))?;
+        (graph_dir, format!("cache-v{SEMANTIC_CACHE_LAYOUT_VERSION}"))
     };
-    let run_id = graph_dir
-        .file_name()
-        .unwrap_or(graph_dir.as_os_str())
-        .to_string_lossy()
-        .into_owned();
+    let collection_options = if args.output_format == OutputFormat::Json {
+        CollectionOptions::new(config.preserve_uniform_field_visibility()).with_declaration_spans()
+    } else {
+        CollectionOptions::new(config.preserve_uniform_field_visibility())
+    };
     let mut profile_graphs = Vec::new();
     for (index, feature_profile) in config.feature_profiles().iter().enumerate() {
         let profile_production_products: Vec<_> = production_products
@@ -547,9 +577,17 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                 feature_profile.name()
             )
         })?;
+        let plan_id = semantic_plan_id(
+            feature_profile,
+            &profile_production_products,
+            doctest_packages.as_deref(),
+            &resolved_metadata,
+            args.target.as_deref().unwrap_or_else(|| toolchain.host()),
+            collection_options,
+        )?;
         let profile_graph_dir = graph_dir
             .join("feature-profiles")
-            .join(format!("{index}-{}", feature_profile.name()));
+            .join(format!("{index}-{}-{plan_id}", feature_profile.name()));
         let production_dir = profile_graph_dir.join("production");
         let non_production_dir = profile_graph_dir.join("non-production");
         fs::create_dir_all(&production_dir).with_context(|| {
@@ -566,7 +604,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         })?;
         profile_graphs.push(FeatureProfileGraph {
             feature_profile,
-            run_id: format!("{run_id}-feature-profile-{index}"),
+            run_id: format!("{run_id}-plan-{plan_id}"),
             production_dir,
             non_production_dir,
             production_products: profile_production_products.clone(),
@@ -585,6 +623,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         .values()
         .map(|source| source.path.clone())
         .collect();
+    let workspace_target_sources = workspace_target_sources(&metadata);
     let cargo = InstrumentedCargo {
         args: &args,
         workspace_root: &workspace_root,
@@ -593,15 +632,13 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         managed_target_dir,
         driver: &driver,
         toolchain: &toolchain,
-        collection_options: if args.output_format == OutputFormat::Json {
-            CollectionOptions::new(config.preserve_uniform_field_visibility())
-                .with_declaration_spans()
-        } else {
-            CollectionOptions::new(config.preserve_uniform_field_visibility())
-        },
+        collection_options,
         doctest_packages: doctest_packages.as_deref(),
         workspace_library_sources,
         workspace_library_source_paths,
+        workspace_target_sources,
+        collect_private_dead_code,
+        private_dead_diagnostics: RefCell::new(Vec::new()),
     };
     let mut production_fragments = Vec::new();
     let mut test_fragments = Vec::new();
@@ -745,6 +782,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
             config.preserve_uniform_field_visibility(),
         ),
     );
+    let private_dead_diagnostics = cargo.private_dead_diagnostics.borrow();
     let mut renderer = DiagnosticRenderer::new(&workspace_root);
     let mut json_diagnostics = Vec::new();
     let mut diagnostic_count = 0;
@@ -818,6 +856,14 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                 )),
             }
         }
+    }
+    if args.output_format == OutputFormat::Json {
+        diagnostic_count += private_dead_diagnostics.len();
+        json_diagnostics.extend(
+            private_dead_diagnostics
+                .iter()
+                .map(json_private_dead_diagnostic),
+        );
     }
     let compilation_target = args.target.as_deref().map_or_else(
         || "the host target".to_owned(),
@@ -921,6 +967,28 @@ fn json_finding(
         "expansion": definition.expansion_span,
         "test_only": finding.test_only,
         "test_compiled_only": finding.test_compiled_only,
+    })
+}
+
+fn json_private_dead_diagnostic(diagnostic: &PrivateDeadDiagnostic) -> serde_json::Value {
+    serde_json::json!({
+        "category": "finding",
+        "code": "hawk::private_dead",
+        "severity": "warning",
+        "kind": "private_dead_code",
+        "identity": {
+            "item": diagnostic.message,
+            "kind": "item",
+        },
+        "location": {
+            "file": diagnostic.file,
+            "byte_start": diagnostic.byte_start,
+            "byte_end": diagnostic.byte_end,
+            "line": diagnostic.line_start,
+            "column": diagnostic.column_start,
+            "end_line": diagnostic.line_end,
+            "end_column": diagnostic.column_end,
+        },
     })
 }
 
@@ -1083,6 +1151,21 @@ struct InstrumentedCargo<'a> {
     doctest_packages: Option<&'a [String]>,
     workspace_library_sources: HashMap<String, WorkspaceLibrarySource>,
     workspace_library_source_paths: HashSet<PathBuf>,
+    workspace_target_sources: HashSet<(String, String, PathBuf)>,
+    collect_private_dead_code: bool,
+    private_dead_diagnostics: RefCell<Vec<PrivateDeadDiagnostic>>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PrivateDeadDiagnostic {
+    message: String,
+    file: String,
+    byte_start: u32,
+    byte_end: u32,
+    line_start: usize,
+    line_end: usize,
+    column_start: usize,
+    column_end: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1352,6 +1435,65 @@ fn package_arguments(packages: &[String], target: &str) -> Vec<OsString> {
 }
 
 impl InstrumentedCargo<'_> {
+    fn run_identity(run_id: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        run_id.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn cargo_target_dir(&self, run_id: &str) -> PathBuf {
+        self.target_dir
+            .join("cargo-targets-v1")
+            .join(format!("{:016x}", Self::run_identity(run_id)))
+    }
+
+    fn driver_alias(&self, run_id: &str) -> Result<PathBuf> {
+        let directory = self.target_dir.join("axiom-wrapper-aliases-v1");
+        fs::create_dir_all(&directory).with_context(|| {
+            format!("create compiler wrapper directory {}", directory.display())
+        })?;
+        let alias = directory.join(format!(
+            "axiom-hir-driver-{:016x}{}",
+            Self::run_identity(run_id),
+            env::consts::EXE_SUFFIX
+        ));
+        let driver = std::path::absolute(self.driver)
+            .with_context(|| format!("resolve compiler driver {}", self.driver.display()))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            match fs::read_link(&alias) {
+                Ok(current) if current == driver => {}
+                Ok(_) => {
+                    fs::remove_file(&alias).with_context(|| {
+                        format!("replace compiler wrapper alias {}", alias.display())
+                    })?;
+                    symlink(&driver, &alias).with_context(|| {
+                        format!("create compiler wrapper alias {}", alias.display())
+                    })?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    symlink(&driver, &alias).with_context(|| {
+                        format!("create compiler wrapper alias {}", alias.display())
+                    })?;
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("inspect compiler wrapper alias {}", alias.display())
+                    });
+                }
+            }
+        }
+        #[cfg(windows)]
+        if !alias.is_file() {
+            fs::copy(&driver, &alias)
+                .with_context(|| format!("create compiler wrapper alias {}", alias.display()))?;
+        }
+        Ok(alias)
+    }
+
     fn command(
         &self,
         run_id: &str,
@@ -1367,6 +1509,8 @@ impl InstrumentedCargo<'_> {
             fix,
             doctests,
         } = invocation.specification();
+        let driver = self.driver_alias(run_id)?;
+        let cargo_target_dir = self.cargo_target_dir(run_id);
         let mut command = Command::new("cargo");
         clear_protocol_environment(&mut command);
         disable_outer_rustc_wrapper(&mut command);
@@ -1377,11 +1521,14 @@ impl InstrumentedCargo<'_> {
             .arg(self.manifest_path)
             .arg("--locked")
             .arg("--target-dir")
-            .arg(self.target_dir)
+            .arg(cargo_target_dir)
             .args(selection_arguments)
             .arg("--color")
             .arg(self.args.color.cargo_value());
         feature_profile.configure_cargo(&mut command);
+        if self.collect_private_dead_code {
+            command.arg("--message-format=json");
+        }
         self.toolchain.configure_command(&mut command)?;
         command.arg("--target").arg(
             self.args
@@ -1402,7 +1549,7 @@ impl InstrumentedCargo<'_> {
             command.env(protocol::FIX_PLAN_ENV, fix.plan);
         }
         command
-            .env("RUSTC_WORKSPACE_WRAPPER", self.driver)
+            .env("RUSTC_WORKSPACE_WRAPPER", driver)
             .env(protocol::VERSION_ENV, protocol::VERSION.to_string())
             .env(protocol::OUTPUT_DIR_ENV, graph_dir)
             .env(protocol::ROOT_CRATE_ENV, root_crate)
@@ -1467,6 +1614,7 @@ impl InstrumentedCargo<'_> {
             let (status, cargo_output) = cargo_output.run(command, subcommand)?;
             let captured_output = fs::read(cargo_output.path())
                 .context("read captured Cargo output for cache validation")?;
+            self.record_private_dead_diagnostics(&captured_output)?;
             if !status.success()
                 && allow_cache_repair
                 && self.managed_target_dir
@@ -1516,6 +1664,47 @@ impl InstrumentedCargo<'_> {
         Ok(())
     }
 
+    fn record_private_dead_diagnostics(&self, output: &[u8]) -> Result<()> {
+        if !self.collect_private_dead_code {
+            return Ok(());
+        }
+        let mut diagnostics = self.private_dead_diagnostics.borrow_mut();
+        for message in Message::parse_stream(BufReader::new(output)) {
+            let message = message.context("parse instrumented Cargo output")?;
+            let Message::CompilerMessage(message) = message else {
+                continue;
+            };
+            let diagnostic = message.message;
+            if diagnostic
+                .code
+                .as_ref()
+                .is_none_or(|code| code.code != "dead_code")
+                || !matches!(
+                    diagnostic.level,
+                    DiagnosticLevel::Warning | DiagnosticLevel::Error
+                )
+            {
+                continue;
+            }
+            for span in diagnostic.spans.into_iter().filter(|span| span.is_primary) {
+                let finding = PrivateDeadDiagnostic {
+                    message: diagnostic.message.clone(),
+                    file: span.file_name,
+                    byte_start: span.byte_start,
+                    byte_end: span.byte_end,
+                    line_start: span.line_start,
+                    line_end: span.line_end,
+                    column_start: span.column_start,
+                    column_end: span.column_end,
+                };
+                if !diagnostics.contains(&finding) {
+                    diagnostics.push(finding);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn collect_fragments(
         &self,
         run_id: &str,
@@ -1554,6 +1743,8 @@ impl InstrumentedCargo<'_> {
 
         let mut production = read_fragments(production_graph_dir)?;
         let mut non_production = read_fragments(non_production_graph_dir)?;
+        production.retain(|fragment| self.is_current_workspace_target(fragment));
+        non_production.retain(|fragment| self.is_current_workspace_target(fragment));
         for fragment in &mut non_production {
             classify_non_production_target(
                 fragment,
@@ -1603,6 +1794,22 @@ impl InstrumentedCargo<'_> {
             production,
             non_production,
         })
+    }
+
+    fn is_current_workspace_target(&self, fragment: &Fragment) -> bool {
+        let Some(crate_root) = fragment.crate_root.as_deref().map(Path::new) else {
+            return true;
+        };
+        let crate_root = if crate_root.is_absolute() {
+            crate_root.to_path_buf()
+        } else {
+            self.workspace_root.join(crate_root)
+        };
+        self.workspace_target_sources.contains(&(
+            fragment.package_name.clone(),
+            fragment.crate_name.clone(),
+            normalize_workspace_source_path(&crate_root),
+        ))
     }
 }
 
@@ -1945,6 +2152,58 @@ fn workspace_library_sources(
         .collect()
 }
 
+fn workspace_target_sources(
+    metadata: &cargo_metadata::Metadata,
+) -> HashSet<(String, String, PathBuf)> {
+    metadata
+        .workspace_packages()
+        .into_iter()
+        .flat_map(|package| {
+            package.targets.iter().map(move |target| {
+                (
+                    package.name.to_string(),
+                    target.name.replace('-', "_"),
+                    normalize_workspace_source_path(target.src_path.as_std_path()),
+                )
+            })
+        })
+        .collect()
+}
+
+fn semantic_plan_id(
+    feature_profile: &FeatureProfile,
+    production_products: &[ProductionSelection<'_>],
+    doctest_packages: Option<&[String]>,
+    metadata: &cargo_metadata::Metadata,
+    target: &str,
+    collection_options: CollectionOptions,
+) -> Result<String> {
+    let mut hasher = DefaultHasher::new();
+    feature_profile.name().hash(&mut hasher);
+    feature_profile
+        .cargo_arguments_description()
+        .hash(&mut hasher);
+    target.hash(&mut hasher);
+    collection_options.as_env_value().hash(&mut hasher);
+    for product in production_products {
+        product.package.hash(&mut hasher);
+        product.product.kind().as_str().hash(&mut hasher);
+        product.product.name().hash(&mut hasher);
+    }
+    doctest_packages.hash(&mut hasher);
+    let mut metadata = serde_json::to_value(metadata)
+        .context("serialize resolved Cargo metadata for semantic cache identity")?;
+    if let serde_json::Value::Object(metadata) = &mut metadata {
+        // Axiom supplies its own target directory. The directory Cargo metadata
+        // reports from ambient configuration does not affect semantic facts.
+        metadata.remove("target_directory");
+    }
+    serde_json::to_vec(&metadata)
+        .context("encode resolved Cargo metadata for semantic cache identity")?
+        .hash(&mut hasher);
+    Ok(format!("{:016x}", hasher.finish()))
+}
+
 fn workspace_library_crates(
     metadata: &cargo_metadata::Metadata,
     audited_crates: Option<&HashSet<String>>,
@@ -2215,8 +2474,13 @@ const DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES: usize = 240;
 
 fn semantic_cache_namespace() -> String {
     let mut hasher = DefaultHasher::new();
-    AXIOM_BUILD_VERSION.hash(&mut hasher);
-    format!("hir-{}-{:016x}", protocol::VERSION, hasher.finish())
+    env!("HAWK_RUSTC_COMMIT_HASH").hash(&mut hasher);
+    format!(
+        "hir-{}-v{}-{:016x}",
+        protocol::VERSION,
+        SEMANTIC_CACHE_LAYOUT_VERSION,
+        hasher.finish()
+    )
 }
 
 fn default_target_dir(workspace_root: &Path) -> PathBuf {
@@ -2434,10 +2698,14 @@ mod tests {
     }
 
     #[test]
-    fn default_target_dir_is_namespaced_by_semantic_analyzer_build() {
+    fn default_target_dir_is_namespaced_by_protocol_cache_and_rustc() {
         let namespace = semantic_cache_namespace();
 
-        assert!(namespace.starts_with(&format!("hir-{}-", crate::protocol::VERSION)));
+        assert!(namespace.starts_with(&format!(
+            "hir-{}-v{}-",
+            crate::protocol::VERSION,
+            super::SEMANTIC_CACHE_LAYOUT_VERSION
+        )));
         assert_eq!(
             namespace
                 .rsplit_once('-')

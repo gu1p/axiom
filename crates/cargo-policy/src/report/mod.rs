@@ -2,6 +2,8 @@ mod configuration;
 pub mod human;
 pub mod json;
 mod output;
+pub(super) mod progress;
+pub(super) mod summary;
 
 use camino::Utf8Path;
 use policy_core::{AnalysisInput, Diagnostic};

@@ -23,8 +23,7 @@ pub fn check(
             tool_diagnostic(diagnostic, input, config_path, color);
         }
     }
-    let (denied, warned) = diagnostic_counts(diagnostics, tools);
-    summary(input, tools, denied, warned);
+    super::summary::write(diagnostics, tools, input);
 }
 
 fn policy_diagnostics(
@@ -54,51 +53,13 @@ fn policy_diagnostics(
     }
 }
 
-fn diagnostic_counts(diagnostics: &[Diagnostic], tools: &[ToolReport]) -> (usize, usize) {
-    let denied = diagnostics
-        .iter()
-        .filter(|item| item.level == Level::Deny)
-        .count()
-        + tools
-            .iter()
-            .flat_map(|report| &report.diagnostics)
-            .filter(|item| item.level == Level::Deny)
-            .count();
-    let warned = diagnostics
-        .iter()
-        .filter(|item| item.level == Level::Warn)
-        .count()
-        + tools
-            .iter()
-            .flat_map(|report| &report.diagnostics)
-            .filter(|item| item.level == Level::Warn)
-            .count();
-    (denied, warned)
-}
-
-fn summary(input: &AnalysisInput, tools: &[ToolReport], denied: usize, warned: usize) {
-    if denied == 0 && warned == 0 {
-        let tools = tools
-            .iter()
-            .map(|report| report.name)
-            .collect::<Vec<_>>()
-            .join(", ");
-        if tools.is_empty() {
-            stderr_line(format_args!(
-                "axiom check passed ({} Rust files)",
-                input.sources.len()
-            ));
-        } else {
-            stderr_line(format_args!(
-                "axiom check passed ({} Rust files; {tools} passed)",
-                input.sources.len()
-            ));
-        }
-    } else {
-        stderr_line(format_args!(
-            "axiom check found {denied} error(s) and {warned} warning(s)"
-        ));
-    }
+pub(crate) fn write_policy_diagnostics(
+    diagnostics: &[Diagnostic],
+    input: &AnalysisInput,
+    config_path: &Utf8Path,
+    choice: ColorChoice,
+) {
+    policy_diagnostics(diagnostics, input, config_path, color_enabled(choice));
 }
 
 fn tool_diagnostic(
@@ -136,6 +97,18 @@ fn tool_diagnostic(
         configuration::write_human(config_path, &hint);
     }
     stderr_line(format_args!(""));
+}
+
+pub(crate) fn write_tool_report(
+    report: &ToolReport,
+    input: &AnalysisInput,
+    config_path: &Utf8Path,
+    choice: ColorChoice,
+) {
+    let color = color_enabled(choice);
+    for diagnostic in &report.diagnostics {
+        tool_diagnostic(diagnostic, input, config_path, color);
+    }
 }
 
 pub fn operational(errors: &[AnalysisError], input: Option<&AnalysisInput>, choice: ColorChoice) {

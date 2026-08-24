@@ -2,7 +2,9 @@ mod cargo;
 mod clippy;
 mod rustdoc;
 
+use core::time::Duration;
 use std::env;
+use std::time::Instant;
 
 use camino::Utf8PathBuf;
 use policy_core::{AnalysisError, AnalysisInput, Level, SourceSpan, ToolConfig};
@@ -25,15 +27,33 @@ pub struct ToolReport {
     pub diagnostics: Vec<ToolDiagnostic>,
 }
 
-pub fn run(input: &AnalysisInput, config: &ToolConfig) -> Result<Vec<ToolReport>, AnalysisError> {
-    let mut reports = Vec::new();
+pub enum RunEvent {
+    Started(&'static str),
+    Finished(ToolReport, Duration),
+}
+
+pub fn run_each(
+    input: &AnalysisInput,
+    config: &ToolConfig,
+    mut emit: impl FnMut(RunEvent),
+) -> Result<(), AnalysisError> {
     if config.clippy.enabled {
-        reports.push(clippy::run(input, &config.clippy)?);
+        emit(RunEvent::Started("clippy"));
+        let started = Instant::now();
+        emit(RunEvent::Finished(
+            clippy::run(input, &config.clippy)?,
+            started.elapsed(),
+        ));
         if config.clippy.check_docs {
-            reports.push(rustdoc::run(input, &config.clippy)?);
+            emit(RunEvent::Started("rustdoc"));
+            let started = Instant::now();
+            emit(RunEvent::Finished(
+                rustdoc::run(input, &config.clippy)?,
+                started.elapsed(),
+            ));
         }
     }
-    Ok(reports)
+    Ok(())
 }
 
 fn offline() -> bool {

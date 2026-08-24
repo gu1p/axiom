@@ -28,15 +28,19 @@ fn cargo_artifacts_honor_the_selected_temporary_root() {
 }
 
 #[test]
-fn cargo_artifacts_do_not_use_external_compiler_cache_wrappers() {
+fn cargo_artifacts_preserve_external_compiler_cache_wrappers() {
     let mut command = Command::new("cargo");
+    command
+        .env("RUSTC_WRAPPER", "kache")
+        .env("RUSTC_WORKSPACE_WRAPPER", "workspace-wrapper");
     configure_cargo(&mut command, Path::new("/workspace"));
 
-    for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
-        assert!(
-            command
-                .get_envs()
-                .any(|(key, value)| { key == variable && value == Some(OsStr::new("")) })
-        );
-    }
+    assert!(
+        command
+            .get_envs()
+            .any(|(key, value)| { key == "RUSTC_WRAPPER" && value == Some(OsStr::new("kache")) })
+    );
+    assert!(command.get_envs().any(|(key, value)| {
+        key == "RUSTC_WORKSPACE_WRAPPER" && value == Some(OsStr::new("workspace-wrapper"))
+    }));
 }

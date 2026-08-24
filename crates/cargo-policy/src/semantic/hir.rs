@@ -16,9 +16,11 @@ const SEMANTIC_SCHEMA: u32 = 5;
 pub(super) fn collect(
     input: &AnalysisInput,
     config: Option<&Table>,
+    collect_hir: bool,
+    collect_private_dead_code: bool,
     facts: &mut CodebaseFacts,
 ) -> Result<(), AnalysisError> {
-    let output = run_analyzer(input, config)?;
+    let output = run_analyzer(input, config, collect_hir, collect_private_dead_code)?;
     if !output.status.success() {
         return Err(command_failure("semantic analysis", &output));
     }
@@ -40,6 +42,8 @@ pub(super) fn collect(
 fn run_analyzer(
     input: &AnalysisInput,
     config: Option<&Table>,
+    collect_hir: bool,
+    collect_private_dead_code: bool,
 ) -> Result<std::process::Output, AnalysisError> {
     let (config_file, excluded_crates) = semantic_config_file(config)?;
     let executable = env::current_exe()
@@ -55,6 +59,12 @@ fn run_analyzer(
         .args(["-W", "hawk::unnecessary_crate_visibility"])
         .env("AXIOM_INTERNAL_SEMANTIC_CONFIG", "1")
         .env("RUSTUP_TOOLCHAIN", SEMANTIC_TOOLCHAIN);
+    if collect_private_dead_code {
+        command.env(
+            policy_semantic::protocol::PRIVATE_DEAD_CODE_ENV,
+            if collect_hir { "1" } else { "only" },
+        );
+    }
     if let Some(file) = &config_file {
         command.arg("--config").arg(file.path());
     }
@@ -116,6 +126,7 @@ pub(super) fn hir_kind(code: &str) -> Option<SemanticFindingKind> {
         "hawk::unnecessary_crate_visibility" => {
             Some(SemanticFindingKind::UnnecessaryCrateVisibility)
         }
+        "hawk::private_dead" => Some(SemanticFindingKind::PrivateDeadCode),
         _ => None,
     }
 }

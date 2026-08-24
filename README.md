@@ -163,9 +163,13 @@ temporary analysis file stays inside the platform temporary directory. On macOS 
 the directory selected by `$TMPDIR` (with the operating-system fallback used when it is unset).
 Reusable Cargo and semantic build caches are workspace-namespaced below `$TMPDIR/axiom`, and Axiom
 passes Cargo an explicit `--target-dir`; a workspace `.cargo/config.toml` or inherited
-`CARGO_TARGET_DIR` therefore cannot put Axiom's build artifacts elsewhere. Axiom also disables
-configured compiler wrappers for its internal builds so an external compiler cache cannot escape
-the temporary boundary.
+`CARGO_TARGET_DIR` therefore cannot put Axiom's build artifacts elsewhere. External compiler caches
+such as `kache` remain user-managed and are reused by ordinary Axiom Cargo checks; Axiom does not
+move or modify their storage.
+
+Semantic compiler lanes and extracted facts are reused from that temporary cache. They are
+invalidated by relevant Cargo metadata, policy settings, the pinned compiler, or the semantic cache
+schema—not merely because Axiom received a new release version.
 
 Cargo's downloaded dependency cache and installed Rust toolchains remain in the user-managed
 `CARGO_HOME` and `RUSTUP_HOME`. They are shared prerequisites rather than artifacts created for an

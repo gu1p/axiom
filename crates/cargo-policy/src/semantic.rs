@@ -1,6 +1,5 @@
 mod config;
 mod hir;
-mod private_dead;
 mod types;
 
 use std::io::Write as _;
@@ -36,11 +35,15 @@ impl FactProvider for SemanticFactProvider {
         #[cfg(target_os = "linux")]
         ensure_supported_host().map_err(single_error)?;
         ensure_toolchain().map_err(single_error)?;
-        if self.collect_hir {
-            hir::collect(input, self.config.as_ref(), facts).map_err(single_error)?;
-        }
-        if self.collect_private_dead_code {
-            private_dead::collect(input, facts).map_err(single_error)?;
+        if self.collect_hir || self.collect_private_dead_code {
+            hir::collect(
+                input,
+                self.config.as_ref(),
+                self.collect_hir,
+                self.collect_private_dead_code,
+                facts,
+            )
+            .map_err(single_error)?;
         }
         Ok(())
     }

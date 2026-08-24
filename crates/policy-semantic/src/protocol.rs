@@ -23,6 +23,7 @@ pub const RUN_ID_ENV: &str = "HAWK_RUN_ID";
 pub const FIX_PLAN_ENV: &str = "HAWK_FIX_PLAN";
 pub const RUSTC_PROBE_ENV: &str = "HAWK_RUSTC_PROBE";
 pub const RUSTC_PROBE_TOKEN_ENV: &str = "HAWK_RUSTC_PROBE_TOKEN";
+pub const PRIVATE_DEAD_CODE_ENV: &str = "AXIOM_INTERNAL_PRIVATE_DEAD_CODE";
 
 pub const ENVIRONMENT_VARIABLES: &[&str] = &[
     VERSION_ENV,
@@ -35,6 +36,7 @@ pub const ENVIRONMENT_VARIABLES: &[&str] = &[
     FIX_PLAN_ENV,
     RUSTC_PROBE_ENV,
     RUSTC_PROBE_TOKEN_ENV,
+    PRIVATE_DEAD_CODE_ENV,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

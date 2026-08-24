@@ -1,3 +1,5 @@
+mod parallel;
+
 use policy_cargo::Workspace;
 use policy_core::{
     AnalysisError, AnalysisInput, Diagnostic, Engine, FactProvider, Level, PolicyConfig,
@@ -30,15 +32,22 @@ pub fn run(options: &CheckOptions) -> u8 {
         Ok(input) => input,
         Err(errors) => return operational(options, &errors, None),
     };
-    let diagnostics = match analyze_policies(&config, &input) {
-        Ok(diagnostics) => diagnostics,
+    let config_path_for_report = config_path
+        .strip_prefix(&input.workspace_root)
+        .unwrap_or(&config_path);
+    let analysis = parallel::run(options, &input, &config, config_path_for_report);
+    let (diagnostics, tool_reports) = match analysis {
+        Ok(analysis) => analysis,
         Err(errors) => return operational(options, &errors, Some(&input)),
     };
-    let tool_reports = match crate::tools::run(&input, &config.tools) {
-        Ok(reports) => reports,
-        Err(error) => return operational(options, &[error], Some(&input)),
-    };
-    report::check(options, &input, &config_path, &diagnostics, &tool_reports);
+    match options.format {
+        OutputFormat::Human => {
+            report::summary::write(&diagnostics, &tool_reports, &input);
+        }
+        OutputFormat::Json => {
+            report::check(options, &input, &config_path, &diagnostics, &tool_reports);
+        }
+    }
     u8::from(
         diagnostics.iter().any(|item| item.level == Level::Deny)
             || tool_reports.iter().any(|report| {

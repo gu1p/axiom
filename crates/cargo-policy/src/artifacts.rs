@@ -20,11 +20,7 @@ pub(crate) fn cargo_target_dir(workspace_root: &Path) -> PathBuf {
 pub(crate) fn configure_cargo(command: &mut Command, workspace_root: &Path) {
     command
         .arg("--target-dir")
-        .arg(cargo_target_dir(workspace_root))
-        // Cargo config can inject cache wrappers whose storage is outside TMPDIR.
-        // Empty environment values override both environment and config entries.
-        .env("RUSTC_WRAPPER", "")
-        .env("RUSTC_WORKSPACE_WRAPPER", "");
+        .arg(cargo_target_dir(workspace_root));
 }
 
 fn cargo_target_dir_in(temp_root: &Path, workspace_root: &Path) -> PathBuf {
