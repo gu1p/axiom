@@ -28,16 +28,17 @@ fn command(input: &AnalysisInput, config: &ClippyConfig) -> Command {
         .current_dir(&input.workspace_root)
         .arg("clippy")
         .arg("--manifest-path")
-        .arg(input.workspace_root.join("Cargo.toml"))
-        .args([
-            "--workspace",
-            "--locked",
-            "--no-deps",
-            "--keep-going",
-            "--quiet",
-            "--message-format=json",
-            "--color=never",
-        ]);
+        .arg(input.workspace_root.join("Cargo.toml"));
+    crate::artifacts::configure_cargo(&mut command, input.workspace_root.as_std_path());
+    command.args([
+        "--workspace",
+        "--locked",
+        "--no-deps",
+        "--keep-going",
+        "--quiet",
+        "--message-format=json",
+        "--color=never",
+    ]);
     if config.checks_all_targets() {
         command.arg("--all-targets");
     }

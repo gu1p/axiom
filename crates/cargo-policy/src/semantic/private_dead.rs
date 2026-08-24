@@ -29,12 +29,20 @@ pub(super) fn collect(
 }
 
 fn run_rustc(input: &AnalysisInput) -> Result<std::process::Output, AnalysisError> {
+    rustc_command(input).output().map_err(|error| {
+        AnalysisError::new(format!("could not run rustc dead-code check: {error}"))
+    })
+}
+
+fn rustc_command(input: &AnalysisInput) -> Command {
     let mut command = Command::new("rustup");
     command
         .args(["run", SEMANTIC_TOOLCHAIN, "cargo", "check"])
         .current_dir(&input.workspace_root)
         .arg("--manifest-path")
-        .arg(input.workspace_root.join("Cargo.toml"))
+        .arg(input.workspace_root.join("Cargo.toml"));
+    crate::artifacts::configure_cargo(&mut command, input.workspace_root.as_std_path());
+    command
         .args([
             "--workspace",
             "--all-targets",
@@ -47,9 +55,7 @@ fn run_rustc(input: &AnalysisInput) -> Result<std::process::Output, AnalysisErro
     if super::offline() {
         command.env("CARGO_NET_OFFLINE", "true");
     }
-    command.output().map_err(|error| {
-        AnalysisError::new(format!("could not run rustc dead-code check: {error}"))
-    })
+    command
 }
 
 fn parse_messages(
@@ -105,3 +111,7 @@ fn append_diagnostic(
     }
     count
 }
+
+#[cfg(test)]
+#[path = "tests/private_dead.rs"]
+mod tests;

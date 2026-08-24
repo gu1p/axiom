@@ -2234,7 +2234,8 @@ fn default_target_dir(workspace_root: &Path) -> PathBuf {
     }
     let workspace = format!("{}{suffix}", &workspace[..workspace_end]);
     env::temp_dir()
-        .join("axiom-semantic-target")
+        .join("axiom")
+        .join("semantic-target")
         .join(semantic_cache_namespace())
         .join(workspace)
 }
@@ -2403,8 +2404,18 @@ mod tests {
         let target_dir = default_target_dir(workspace_root);
 
         assert_eq!(
-            target_dir.parent().and_then(Path::parent),
-            Some(std::env::temp_dir().join("axiom-semantic-target").as_path())
+            target_dir
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent),
+            Some(std::env::temp_dir().join("axiom").as_path())
+        );
+        assert_eq!(
+            target_dir
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::file_name),
+            Some("semantic-target".as_ref())
         );
         assert_eq!(
             target_dir.parent().and_then(Path::file_name),

@@ -29,6 +29,12 @@ fn command_maps_clippy_configuration_to_cargo_arguments() {
         "/workspace/Cargo.toml".to_owned(),
     ]));
     assert!(arguments.contains(&"--workspace".to_owned()));
+    let target = arguments
+        .windows(2)
+        .find(|arguments| arguments[0] == "--target-dir")
+        .map(|arguments| std::path::Path::new(&arguments[1]))
+        .expect("Clippy command has an explicit target directory");
+    assert!(target.starts_with(std::env::temp_dir()));
     assert!(arguments.contains(&"--no-deps".to_owned()));
     assert!(arguments.contains(&"--keep-going".to_owned()));
     assert!(!arguments.contains(&"--all-targets".to_owned()));

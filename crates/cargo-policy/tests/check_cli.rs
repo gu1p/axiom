@@ -14,7 +14,22 @@ fn command(workspace: &TestWorkspace) -> Command {
         .arg("--color")
         .arg("never")
         .env("CARGO_TARGET_DIR", workspace.root().join("target"));
+    #[cfg(unix)]
+    command.env("TMPDIR", workspace.root());
+    #[cfg(windows)]
+    command.env("TEMP", workspace.root());
     command
+}
+
+fn assert_artifacts_are_temp_scoped(workspace: &TestWorkspace) {
+    assert!(
+        workspace.root().join("axiom/cargo-target-v1").is_dir(),
+        "Axiom must create its Cargo artifact cache beneath TMPDIR"
+    );
+    assert!(
+        !workspace.root().join("target").exists(),
+        "Axiom must ignore an inherited Cargo target directory"
+    );
 }
 
 #[test]
@@ -271,6 +286,7 @@ level = "warn"
             .as_str()
             .is_some_and(|message| message.contains("unused_private"))
     );
+    assert_artifacts_are_temp_scoped(&workspace);
 }
 
 fn write_clippy_policy(workspace: &TestWorkspace, enabled: bool, deny_warnings: bool) {
@@ -349,6 +365,7 @@ fn clippy_denied_warning_is_a_versioned_tool_diagnostic() {
     assert!(String::from_utf8_lossy(&human.stderr).contains(
         "policy: tools.clippy.lints.\"clippy::needless_return\" = \"deny\" in policy.toml"
     ));
+    assert_artifacts_are_temp_scoped(&workspace);
 }
 
 #[test]
@@ -471,4 +488,5 @@ warnings = "deny"
         rustdoc["configuration"]["key"],
         "tools.clippy.lints.\"rustdoc::missing_crate_level_docs\""
     );
+    assert_artifacts_are_temp_scoped(&workspace);
 }

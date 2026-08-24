@@ -1,6 +1,7 @@
 //! Command-line frontend and orchestration for Axiom checks.
 
 mod args;
+mod artifacts;
 mod check;
 mod init;
 mod report;

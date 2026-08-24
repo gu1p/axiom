@@ -156,6 +156,21 @@ object.
 Source globs are evaluated against forward-slash workspace-relative paths; normal ignore files,
 `.git`, Cargo's target directory, and directory symlinks are excluded from discovery.
 
+## Temporary artifacts
+
+While `axiom check` runs, every Axiom-owned cache, compiler artifact, build-script output, and
+temporary analysis file stays inside the platform temporary directory. On macOS and Unix that is
+the directory selected by `$TMPDIR` (with the operating-system fallback used when it is unset).
+Reusable Cargo and semantic build caches are workspace-namespaced below `$TMPDIR/axiom`, and Axiom
+passes Cargo an explicit `--target-dir`; a workspace `.cargo/config.toml` or inherited
+`CARGO_TARGET_DIR` therefore cannot put Axiom's build artifacts elsewhere. Axiom also disables
+configured compiler wrappers for its internal builds so an external compiler cache cannot escape
+the temporary boundary.
+
+Cargo's downloaded dependency cache and installed Rust toolchains remain in the user-managed
+`CARGO_HOME` and `RUSTUP_HOME`. They are shared prerequisites rather than artifacts created for an
+Axiom analysis.
+
 ## Clippy
 
 `axiom check` runs Clippy for the complete workspace before producing its combined result. Clippy

@@ -20,16 +20,17 @@ fn command(input: &AnalysisInput, config: &ClippyConfig) -> Command {
         .current_dir(&input.workspace_root)
         .arg("doc")
         .arg("--manifest-path")
-        .arg(input.workspace_root.join("Cargo.toml"))
-        .args([
-            "--workspace",
-            "--locked",
-            "--no-deps",
-            "--keep-going",
-            "--quiet",
-            "--message-format=json",
-            "--color=never",
-        ]);
+        .arg(input.workspace_root.join("Cargo.toml"));
+    crate::artifacts::configure_cargo(&mut command, input.workspace_root.as_std_path());
+    command.args([
+        "--workspace",
+        "--locked",
+        "--no-deps",
+        "--keep-going",
+        "--quiet",
+        "--message-format=json",
+        "--color=never",
+    ]);
     feature_arguments(&mut command, config);
     command.env("RUSTDOCFLAGS", rustdoc_flags(config));
     if offline() {
@@ -48,3 +49,7 @@ fn rustdoc_flags(config: &ClippyConfig) -> OsString {
     }
     flags
 }
+
+#[cfg(test)]
+#[path = "tests/rustdoc.rs"]
+mod tests;
