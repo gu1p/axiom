@@ -23,7 +23,7 @@ pub fn check(
             tool_diagnostic(diagnostic, input, config_path, color);
         }
     }
-    super::summary::write(diagnostics, tools, input);
+    super::summary::write(diagnostics, tools, input, false);
 }
 
 fn policy_diagnostics(

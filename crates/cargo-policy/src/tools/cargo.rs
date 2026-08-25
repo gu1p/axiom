@@ -7,13 +7,20 @@ use cargo_metadata::diagnostic::{Diagnostic, DiagnosticLevel, DiagnosticSpan};
 use cargo_metadata::{Message, diagnostic};
 use policy_core::{AnalysisError, AnalysisInput, Level, Position, SourceSpan};
 
+use super::RunMode;
 use super::{ToolDiagnostic, ToolReport};
+
+mod stream;
 
 pub fn execute(
     tool: &'static str,
     input: &AnalysisInput,
     command: &mut Command,
+    mode: RunMode,
 ) -> Result<ToolReport, AnalysisError> {
+    if mode.fail_fast {
+        return stream::execute(tool, input, command, mode.ignore_warnings);
+    }
     let output = command.output().map_err(|error| {
         AnalysisError::new(format!("could not run {tool} through Cargo: {error}"))
     })?;

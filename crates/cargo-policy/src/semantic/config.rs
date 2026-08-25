@@ -3,6 +3,19 @@ use std::io::Write as _;
 use policy_core::AnalysisError;
 use toml::{Table, Value};
 
+pub(crate) fn validate_config(
+    workspace_root: &camino::Utf8Path,
+    config: Option<&Table>,
+) -> Result<(), AnalysisError> {
+    let Some(_) = config else {
+        return Ok(());
+    };
+    let (file, _) = semantic_config_file(config)?;
+    let file = file.expect("configured semantic table creates a temporary file");
+    policy_semantic::validate_config(workspace_root.as_std_path(), file.path())
+        .map_err(|error| AnalysisError::new(format!("invalid semantic configuration: {error}")))
+}
+
 pub(super) fn semantic_config_file(
     config: Option<&Table>,
 ) -> Result<(Option<tempfile::NamedTempFile>, Vec<String>), AnalysisError> {

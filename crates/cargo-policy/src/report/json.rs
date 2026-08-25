@@ -36,7 +36,12 @@ struct Summary {
     warnings: usize,
 }
 
-pub fn check(diagnostics: &[Diagnostic], tools: &[ToolReport], config_path: &Utf8Path) {
+pub fn check(
+    diagnostics: &[Diagnostic],
+    tools: &[ToolReport],
+    config_path: &Utf8Path,
+    stopped: bool,
+) {
     let errors = diagnostics
         .iter()
         .filter(|item| item.level == Level::Deny)
@@ -67,7 +72,11 @@ pub fn check(diagnostics: &[Diagnostic], tools: &[ToolReport], config_path: &Utf
         .collect();
     let output = JsonOutput {
         schema_version: 1,
-        outcome: if errors == 0 { "passed" } else { "violations" },
+        outcome: if errors == 0 && !stopped {
+            "passed"
+        } else {
+            "violations"
+        },
         diagnostics: json_diagnostics,
         summary: Summary { errors, warnings },
     };

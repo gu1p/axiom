@@ -4,6 +4,7 @@ mod args;
 mod artifacts;
 mod check;
 mod init;
+mod process;
 mod report;
 mod semantic;
 mod tools;

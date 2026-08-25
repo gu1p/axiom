@@ -30,27 +30,34 @@ impl Engine {
         Self { providers, rules }
     }
 
-    /// Collects all facts and evaluates every enabled rule.
+    /// Adds this engine's facts to an existing fact store.
     ///
     /// # Errors
     ///
-    /// Returns provider errors without evaluating policies against partial facts.
-    pub fn run(&self, input: &AnalysisInput) -> Result<Vec<Diagnostic>, Vec<AnalysisError>> {
-        let mut facts = CodebaseFacts::default();
+    /// Returns every provider error without discarding facts collected by other engines.
+    pub fn collect_into(
+        &self,
+        input: &AnalysisInput,
+        facts: &mut CodebaseFacts,
+    ) -> Result<(), Vec<AnalysisError>> {
         let mut errors = Vec::new();
         for provider in &self.providers {
-            if let Err(mut provider_errors) = provider.collect(input, &mut facts) {
+            if let Err(mut provider_errors) = provider.collect(input, facts) {
                 errors.append(&mut provider_errors);
             }
         }
         if !errors.is_empty() {
             return Err(errors);
         }
+        Ok(())
+    }
 
+    /// Evaluates this engine's enabled rules against previously collected facts.
+    pub fn evaluate(&self, facts: &CodebaseFacts) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for rule in &self.rules {
             if rule.level() != Level::Allow {
-                rule.evaluate(&facts, &mut diagnostics);
+                rule.evaluate(facts, &mut diagnostics);
             }
         }
         diagnostics.sort_by(|left, right| {
@@ -60,6 +67,11 @@ impl Engine {
                 &right.rule_id,
             ))
         });
-        Ok(diagnostics)
+        diagnostics
+    }
+
+    #[must_use]
+    pub fn has_rules(&self) -> bool {
+        !self.rules.is_empty()
     }
 }

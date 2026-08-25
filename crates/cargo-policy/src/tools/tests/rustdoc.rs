@@ -8,7 +8,7 @@ fn command_keeps_rustdoc_artifacts_below_platform_temp() {
         workspace_root: "/workspace".into(),
         sources: Vec::new(),
     };
-    let command = command(&input, &ClippyConfig::default());
+    let command = command(&input, &ClippyConfig::default(), false);
     let arguments: Vec<_> = command.get_args().collect();
     let target = arguments
         .windows(2)

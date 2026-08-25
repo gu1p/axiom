@@ -4,8 +4,19 @@ use crate::tools::ToolReport;
 
 use super::output::stderr_line;
 
-pub(crate) fn write(diagnostics: &[Diagnostic], tools: &[ToolReport], input: &AnalysisInput) {
+pub(crate) fn write(
+    diagnostics: &[Diagnostic],
+    tools: &[ToolReport],
+    input: &AnalysisInput,
+    stopped: bool,
+) {
     let (denied, warned) = counts(diagnostics, tools);
+    if stopped {
+        stderr_line(format_args!(
+            "axiom check stopped after first finding ({denied} error(s) and {warned} warning(s))"
+        ));
+        return;
+    }
     if denied == 0 && warned == 0 {
         passed(input, tools);
     } else {

@@ -2,6 +2,8 @@ mod config;
 mod hir;
 mod types;
 
+pub(crate) use config::validate_config;
+
 use std::io::Write as _;
 use std::{env, fs, path::Path, process::Command};
 
@@ -24,6 +26,33 @@ impl SemanticFactProvider {
             collect_private_dead_code,
         }
     }
+
+    pub(super) fn collect_fail_fast_private(
+        &self,
+        input: &AnalysisInput,
+        facts: &mut CodebaseFacts,
+        stop: &mut dyn FnMut(&CodebaseFacts) -> bool,
+    ) -> Result<bool, Vec<AnalysisError>> {
+        Self::prepare().map_err(single_error)?;
+        if !self.collect_hir && !self.collect_private_dead_code {
+            return Ok(false);
+        }
+        hir::collect(
+            input,
+            self.config.as_ref(),
+            self.collect_hir,
+            self.collect_private_dead_code,
+            facts,
+            self.collect_private_dead_code.then_some(stop),
+        )
+        .map_err(single_error)
+    }
+
+    fn prepare() -> Result<(), AnalysisError> {
+        #[cfg(target_os = "linux")]
+        ensure_supported_host()?;
+        ensure_toolchain()
+    }
 }
 
 impl FactProvider for SemanticFactProvider {
@@ -32,18 +61,21 @@ impl FactProvider for SemanticFactProvider {
         input: &AnalysisInput,
         facts: &mut CodebaseFacts,
     ) -> Result<(), Vec<AnalysisError>> {
-        #[cfg(target_os = "linux")]
-        ensure_supported_host().map_err(single_error)?;
-        ensure_toolchain().map_err(single_error)?;
+        Self::prepare().map_err(single_error)?;
         if self.collect_hir || self.collect_private_dead_code {
-            hir::collect(
+            let stopped = hir::collect(
                 input,
                 self.config.as_ref(),
                 self.collect_hir,
                 self.collect_private_dead_code,
                 facts,
+                None,
             )
             .map_err(single_error)?;
+            debug_assert!(
+                !stopped,
+                "comprehensive semantic collection cannot stop early"
+            );
         }
         Ok(())
     }

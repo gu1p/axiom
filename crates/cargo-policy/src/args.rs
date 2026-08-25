@@ -31,6 +31,48 @@ pub struct CheckOptions {
     /// Colorize human diagnostics.
     #[arg(long, value_enum, default_value_t = ColorChoice::Auto)]
     pub color: ColorChoice,
+    /// Stop after the first selected finding.
+    #[arg(long)]
+    pub fail_fast: bool,
+    /// Suppress warning-level findings.
+    #[arg(long)]
+    pub ignore_warnings: bool,
+    #[command(flatten)]
+    pub syntax: SyntaxSelectors,
+    #[command(flatten)]
+    pub semantic: SemanticSelectors,
+    #[command(flatten)]
+    pub tools: ToolSelectors,
+}
+
+#[derive(Debug, Args)]
+pub struct SyntaxSelectors {
+    /// Run configured size policies.
+    #[arg(long)]
+    pub size: bool,
+    /// Run configured test-placement policies.
+    #[arg(long)]
+    pub testing: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SemanticSelectors {
+    /// Run configured dead-code policies.
+    #[arg(long)]
+    pub dead_code: bool,
+    /// Run configured visibility policies.
+    #[arg(long)]
+    pub visibility: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ToolSelectors {
+    /// Run configured Clippy checks.
+    #[arg(long)]
+    pub clippy: bool,
+    /// Run configured rustdoc checks.
+    #[arg(long)]
+    pub rustdoc: bool,
 }
 
 #[derive(Debug, Args)]

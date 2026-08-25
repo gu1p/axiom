@@ -54,11 +54,34 @@ axiom check --manifest-path path/to/Cargo.toml
 axiom check --config path/to/policy.toml
 axiom check --format json
 axiom check --color never
+axiom check --size --testing
+axiom check --dead-code --fail-fast
+axiom check --fail-fast --ignore-warnings
 ```
 
 Exit code `0` means the check completed without deny-level findings, `1` means a native policy or
 wrapped tool failed, and `2` means configuration, discovery, tool availability, I/O, UTF-8, or
 parsing prevented a complete check.
+
+### Selecting checks and failing fast
+
+Check-family flags narrow the configured checks that run. Combine any number of `--size`,
+`--testing`, `--dead-code`, `--visibility`, `--clippy`, and `--rustdoc`; multiple flags form a
+union. With no family flags, Axiom runs every configured check. Selectors never enable a rule or
+tool disabled in `policy.toml`, and `--rustdoc` still respects both `tools.clippy.enabled` and
+`tools.clippy.check-docs`.
+
+`--fail-fast` runs selected families in deterministic light-to-heavy order: size, testing, Clippy,
+rustdoc, dead-code, then visibility. It reports one finding and does not start later families.
+Clippy, rustdoc, and private dead-code diagnostics are streamed with a single Cargo job so Axiom
+can stop their process tree immediately. Public dead-code, test-only, and visibility findings need
+the complete workspace graph, so their compiler fact collection finishes before Axiom selects the
+first finding by path, byte offset, and rule ID.
+
+By default, either a warning or an error stops `--fail-fast` and returns exit code `1`. Use
+`--ignore-warnings` to suppress warning-level diagnostics and counts in either comprehensive or
+fail-fast mode. A fail-fast warning remains a JSON warning, but the document outcome is
+`"violations"` because the command stopped with exit code `1`.
 
 ## Releases
 

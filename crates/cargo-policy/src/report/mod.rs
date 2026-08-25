@@ -17,12 +17,13 @@ pub fn check(
     config_path: &Utf8Path,
     diagnostics: &[Diagnostic],
     tools: &[ToolReport],
+    stopped: bool,
 ) {
     let config_path = config_path
         .strip_prefix(&input.workspace_root)
         .unwrap_or(config_path);
     match options.format {
         OutputFormat::Human => human::check(diagnostics, tools, input, config_path, options.color),
-        OutputFormat::Json => json::check(diagnostics, tools, config_path),
+        OutputFormat::Json => json::check(diagnostics, tools, config_path, stopped),
     }
 }

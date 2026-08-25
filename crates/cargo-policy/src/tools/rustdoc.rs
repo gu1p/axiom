@@ -5,16 +5,20 @@ use std::process::Command;
 use policy_core::{AnalysisError, AnalysisInput, ClippyConfig};
 
 use super::clippy::{feature_arguments, profile};
-use super::{ToolReport, cargo, offline};
+use super::{RunMode, ToolReport, cargo, offline};
 
 const TOOL_NAME: &str = "rustdoc";
 
-pub fn run(input: &AnalysisInput, config: &ClippyConfig) -> Result<ToolReport, AnalysisError> {
-    let mut command = command(input, config);
-    cargo::execute(TOOL_NAME, input, &mut command)
+pub fn run(
+    input: &AnalysisInput,
+    config: &ClippyConfig,
+    mode: RunMode,
+) -> Result<ToolReport, AnalysisError> {
+    let mut command = command(input, config, mode.fail_fast);
+    cargo::execute(TOOL_NAME, input, &mut command, mode)
 }
 
-fn command(input: &AnalysisInput, config: &ClippyConfig) -> Command {
+fn command(input: &AnalysisInput, config: &ClippyConfig, fail_fast: bool) -> Command {
     let mut command = Command::new("cargo");
     command
         .current_dir(&input.workspace_root)
@@ -22,15 +26,13 @@ fn command(input: &AnalysisInput, config: &ClippyConfig) -> Command {
         .arg("--manifest-path")
         .arg(input.workspace_root.join("Cargo.toml"));
     crate::artifacts::configure_cargo(&mut command, input.workspace_root.as_std_path());
-    command.args([
-        "--workspace",
-        "--locked",
-        "--no-deps",
-        "--keep-going",
-        "--quiet",
-        "--message-format=json",
-        "--color=never",
-    ]);
+    command.args(["--workspace", "--locked", "--no-deps"]);
+    if fail_fast {
+        command.args(["--jobs", "1"]);
+    } else {
+        command.arg("--keep-going");
+    }
+    command.args(["--quiet", "--message-format=json", "--color=never"]);
     feature_arguments(&mut command, config);
     command.env("RUSTDOCFLAGS", rustdoc_flags(config));
     if offline() {

@@ -17,7 +17,7 @@ fn command_maps_clippy_configuration_to_cargo_arguments() {
         warnings: ClippyWarningPolicy::Warn,
         ..ClippyConfig::default()
     };
-    let command = command(&input, &config);
+    let command = command(&input, &config, false);
     let arguments: Vec<_> = command
         .get_args()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -54,6 +54,22 @@ fn command_maps_clippy_configuration_to_cargo_arguments() {
     assert!(arguments.contains(&"clippy::pedantic".to_owned()));
     assert!(arguments.contains(&"clippy::unwrap-used".to_owned()));
     assert!(arguments.contains(&"clippy::cast-lossless".to_owned()));
+}
+
+#[test]
+fn fail_fast_command_is_single_job_without_keep_going() {
+    let input = policy_core::AnalysisInput {
+        workspace_root: "/workspace".into(),
+        sources: Vec::new(),
+    };
+    let command = command(&input, &ClippyConfig::default(), true);
+    let arguments: Vec<_> = command
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+
+    assert!(!arguments.contains(&"--keep-going".to_owned()));
+    assert!(arguments.windows(2).any(|pair| pair == ["--jobs", "1"]));
 }
 
 #[test]

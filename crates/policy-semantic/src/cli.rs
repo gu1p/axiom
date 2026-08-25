@@ -344,6 +344,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         .command;
     let private_dead_code_mode = env::var_os(protocol::PRIVATE_DEAD_CODE_ENV);
     let collect_private_dead_code = private_dead_code_mode.is_some();
+    let stream_private_dead_code = env::var_os(protocol::PRIVATE_DEAD_CODE_STREAM_ENV).is_some();
     let private_dead_code_only = private_dead_code_mode.as_deref() == Some(OsStr::new("only"));
     debug_assert_eq!(
         lint_levels.overrides.len(),
@@ -638,6 +639,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         workspace_library_source_paths,
         workspace_target_sources,
         collect_private_dead_code,
+        stream_private_dead_code,
         private_dead_diagnostics: RefCell::new(Vec::new()),
     };
     let mut production_fragments = Vec::new();
@@ -915,8 +917,18 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
             });
             let stdout = std::io::stdout();
             let mut stdout = stdout.lock();
-            serde_json::to_writer_pretty(&mut stdout, &output)
-                .context("serialize JSON diagnostic output")?;
+            if stream_private_dead_code {
+                let event = serde_json::json!({
+                    "stream_schema_version": 1,
+                    "event": "complete",
+                    "report": output,
+                });
+                serde_json::to_writer(&mut stdout, &event)
+                    .context("serialize streaming JSON diagnostic output")?;
+            } else {
+                serde_json::to_writer_pretty(&mut stdout, &output)
+                    .context("serialize JSON diagnostic output")?;
+            }
             writeln!(stdout).context("write JSON diagnostic output")?;
         }
     }
@@ -990,6 +1002,52 @@ fn json_private_dead_diagnostic(diagnostic: &PrivateDeadDiagnostic) -> serde_jso
             "end_column": diagnostic.column_end,
         },
     })
+}
+
+fn emit_private_dead_events(line: &[u8]) -> Result<()> {
+    for message in Message::parse_stream(BufReader::new(line)) {
+        let Message::CompilerMessage(message) = message.context("parse Cargo stream event")? else {
+            continue;
+        };
+        let diagnostic = message.message;
+        if diagnostic
+            .code
+            .as_ref()
+            .is_none_or(|code| code.code != "dead_code")
+            || !matches!(
+                diagnostic.level,
+                DiagnosticLevel::Warning | DiagnosticLevel::Error
+            )
+        {
+            continue;
+        }
+        for span in diagnostic.spans.into_iter().filter(|span| span.is_primary) {
+            let finding = PrivateDeadDiagnostic {
+                message: diagnostic.message.clone(),
+                file: span.file_name,
+                byte_start: span.byte_start,
+                byte_end: span.byte_end,
+                line_start: span.line_start,
+                line_end: span.line_end,
+                column_start: span.column_start,
+                column_end: span.column_end,
+            };
+            let event = serde_json::json!({
+                "stream_schema_version": 1,
+                "event": "private_dead_code",
+                "diagnostic": json_private_dead_diagnostic(&finding),
+            });
+            let stdout = std::io::stdout();
+            let mut stdout = stdout.lock();
+            serde_json::to_writer(&mut stdout, &event)
+                .context("serialize private dead-code stream event")?;
+            writeln!(stdout).context("write private dead-code stream event")?;
+            stdout
+                .flush()
+                .context("flush private dead-code stream event")?;
+        }
+    }
+    Ok(())
 }
 
 /// Builds a target-independent finding identity from length-prefixed semantic and source components.
@@ -1153,10 +1211,11 @@ struct InstrumentedCargo<'a> {
     workspace_library_source_paths: HashSet<PathBuf>,
     workspace_target_sources: HashSet<(String, String, PathBuf)>,
     collect_private_dead_code: bool,
+    stream_private_dead_code: bool,
     private_dead_diagnostics: RefCell<Vec<PrivateDeadDiagnostic>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 struct PrivateDeadDiagnostic {
     message: String,
     file: String,
@@ -1246,10 +1305,12 @@ struct ConfiguredCargoCommand {
 struct CargoOutputCapture {
     output: NamedTempFile,
     reader: PipeReader,
+    stream_private_dead_code: bool,
+    pending: Vec<u8>,
 }
 
 impl CargoOutputCapture {
-    fn new(command: &mut Command) -> Result<Self> {
+    fn new(command: &mut Command, stream_private_dead_code: bool) -> Result<Self> {
         let output = NamedTempFile::new().context("create temporary Cargo output file")?;
         let (reader, writer) = std::io::pipe().context("create Cargo output pipe")?;
         command.stdout(
@@ -1258,7 +1319,12 @@ impl CargoOutputCapture {
                 .context("duplicate Cargo output pipe for stdout")?,
         );
         command.stderr(writer);
-        Ok(Self { output, reader })
+        Ok(Self {
+            output,
+            reader,
+            stream_private_dead_code,
+            pending: Vec::new(),
+        })
     }
 
     /// Drains output while Cargo runs, then closes the reader before returning the captured bytes.
@@ -1292,6 +1358,7 @@ impl CargoOutputCapture {
                     .as_file_mut()
                     .write_all(&buffer[..read])
                     .context("write temporary Cargo output file")?;
+                self.stream_private_diagnostics(&buffer[..read])?;
                 pending -= read;
             }
             if let Some(status) = status {
@@ -1306,6 +1373,18 @@ impl CargoOutputCapture {
             .flush()
             .context("flush temporary Cargo output file")?;
         Ok((status, self.output))
+    }
+
+    fn stream_private_diagnostics(&mut self, bytes: &[u8]) -> Result<()> {
+        if !self.stream_private_dead_code {
+            return Ok(());
+        }
+        self.pending.extend_from_slice(bytes);
+        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line = self.pending.drain(..=end).collect::<Vec<_>>();
+            emit_private_dead_events(&line)?;
+        }
+        Ok(())
     }
 }
 
@@ -1525,6 +1604,9 @@ impl InstrumentedCargo<'_> {
             .args(selection_arguments)
             .arg("--color")
             .arg(self.args.color.cargo_value());
+        if self.stream_private_dead_code {
+            command.args(["--jobs", "1"]);
+        }
         feature_profile.configure_cargo(&mut command);
         if self.collect_private_dead_code {
             command.arg("--message-format=json");
@@ -1574,7 +1656,10 @@ impl InstrumentedCargo<'_> {
             }
         }
         let cargo_output = if self.args.output_format == OutputFormat::Json {
-            Some(CargoOutputCapture::new(&mut command)?)
+            Some(CargoOutputCapture::new(
+                &mut command,
+                self.stream_private_dead_code,
+            )?)
         } else {
             None
         };
@@ -2547,6 +2632,12 @@ fn reset_managed_target_dir(target_dir: &Path) -> Result<()> {
     }
     fs::create_dir_all(target_dir)
         .with_context(|| format!("recreate semantic cache {}", target_dir.display()))
+}
+
+pub(crate) fn invalidate_managed_cache(workspace_root: &Path) -> Result<()> {
+    let target_dir = default_target_dir(workspace_root);
+    let _lock = acquire_managed_target_lock(&target_dir)?;
+    reset_managed_target_dir(&target_dir)
 }
 
 fn read_fragments(graph_dir: &Path) -> Result<Vec<Fragment>> {

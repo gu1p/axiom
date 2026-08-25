@@ -1,3 +1,5 @@
+mod stream;
+
 use std::{env, process::Command};
 
 use policy_core::{
@@ -19,32 +21,46 @@ pub(super) fn collect(
     collect_hir: bool,
     collect_private_dead_code: bool,
     facts: &mut CodebaseFacts,
-) -> Result<(), AnalysisError> {
-    let output = run_analyzer(input, config, collect_hir, collect_private_dead_code)?;
-    if !output.status.success() {
-        return Err(command_failure("semantic analysis", &output));
-    }
-    let report: SemanticReport = serde_json::from_slice(&output.stdout).map_err(|error| {
-        AnalysisError::new(format!("semantic analyzer returned invalid JSON: {error}"))
-    })?;
-    if report.schema_version != SEMANTIC_SCHEMA {
-        return Err(AnalysisError::new(format!(
-            "semantic analyzer schema {} is incompatible with expected schema {SEMANTIC_SCHEMA}",
-            report.schema_version
-        )));
-    }
+    stop_on_private: Option<&mut dyn FnMut(&CodebaseFacts) -> bool>,
+) -> Result<bool, AnalysisError> {
+    let (config_file, mut command) = analyzer_command(
+        input,
+        config,
+        collect_hir,
+        collect_private_dead_code,
+        stop_on_private.is_some(),
+    )?;
+    let report = if let Some(stop) = stop_on_private {
+        match stream::run(input, facts, &mut command, stop)? {
+            stream::Outcome::Complete(report) => report,
+            stream::Outcome::Stopped => return Ok(true),
+        }
+    } else {
+        let output = command.output().map_err(|error| {
+            AnalysisError::new(format!("could not run semantic analysis: {error}"))
+        })?;
+        if !output.status.success() {
+            return Err(command_failure("semantic analysis", &output));
+        }
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            AnalysisError::new(format!("semantic analyzer returned invalid JSON: {error}"))
+        })?
+    };
+    drop(config_file);
+    validate_report(&report)?;
     for diagnostic in report.diagnostics {
         append_diagnostic(input, facts, diagnostic)?;
     }
-    Ok(())
+    Ok(false)
 }
 
-fn run_analyzer(
+fn analyzer_command(
     input: &AnalysisInput,
     config: Option<&Table>,
     collect_hir: bool,
     collect_private_dead_code: bool,
-) -> Result<std::process::Output, AnalysisError> {
+    stream_private_dead_code: bool,
+) -> Result<(Option<tempfile::NamedTempFile>, Command), AnalysisError> {
     let (config_file, excluded_crates) = semantic_config_file(config)?;
     let executable = env::current_exe()
         .map_err(|error| AnalysisError::new(format!("could not locate Axiom: {error}")))?;
@@ -65,6 +81,9 @@ fn run_analyzer(
             if collect_hir { "1" } else { "only" },
         );
     }
+    if stream_private_dead_code {
+        command.env(policy_semantic::protocol::PRIVATE_DEAD_CODE_STREAM_ENV, "1");
+    }
     if let Some(file) = &config_file {
         command.arg("--config").arg(file.path());
     }
@@ -74,12 +93,21 @@ fn run_analyzer(
     for crate_name in excluded_crates {
         command.arg("--exclude-crate").arg(crate_name);
     }
-    command
-        .output()
-        .map_err(|error| AnalysisError::new(format!("could not run semantic analysis: {error}")))
+    Ok((config_file, command))
 }
 
-fn append_diagnostic(
+fn validate_report(report: &SemanticReport) -> Result<(), AnalysisError> {
+    if report.schema_version == SEMANTIC_SCHEMA {
+        Ok(())
+    } else {
+        Err(AnalysisError::new(format!(
+            "semantic analyzer schema {} is incompatible with expected schema {SEMANTIC_SCHEMA}",
+            report.schema_version
+        )))
+    }
+}
+
+pub(super) fn append_diagnostic(
     input: &AnalysisInput,
     facts: &mut CodebaseFacts,
     diagnostic: RawSemanticDiagnostic,

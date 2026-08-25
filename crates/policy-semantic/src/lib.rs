@@ -47,3 +47,22 @@ pub fn run_frontend(arguments: &[String]) -> std::process::ExitCode {
 pub fn run_rustc_probe(arguments: &[String]) -> Option<std::process::ExitCode> {
     toolchain::run_rustc_probe(arguments)
 }
+
+/// Invalidates Axiom's managed semantic cache after an interrupted analysis.
+#[cfg(feature = "frontend")]
+#[doc(hidden)]
+pub fn invalidate_managed_cache(workspace_root: &std::path::Path) -> Result<(), String> {
+    cli::invalidate_managed_cache(workspace_root).map_err(|error| format!("{error:#}"))
+}
+
+/// Validates a normalized semantic configuration without running compiler analysis.
+#[cfg(feature = "frontend")]
+#[doc(hidden)]
+pub fn validate_config(
+    workspace_root: &std::path::Path,
+    config_path: &std::path::Path,
+) -> Result<(), String> {
+    config::Config::load(workspace_root, Some(config_path))
+        .map(|_| ())
+        .map_err(|error| format!("{error:#}"))
+}
