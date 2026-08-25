@@ -38,7 +38,7 @@ pub(super) fn tool(
         RunEvent::Started(name) => {
             *active_tool = Some(name);
             if options.format == OutputFormat::Human {
-                report::progress::started(name);
+                report::progress::started(name, options.color);
             }
         }
         RunEvent::Finished(mut tool_report, elapsed) => {

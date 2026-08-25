@@ -69,7 +69,7 @@ pub(super) fn run(
     let run_policies = !policies.is_empty();
     let run_tools = crate::tools::any_enabled(&config.tools, selection);
     if run_policies && options.format == OutputFormat::Human {
-        report::progress::started("policies");
+        report::progress::started("policies", options.color);
     }
     let (sender, receiver) = mpsc::channel();
     let mut state = State::new(!run_policies, !run_tools);

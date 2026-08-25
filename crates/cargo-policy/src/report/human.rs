@@ -59,7 +59,9 @@ pub(crate) fn write_policy_diagnostics(
     config_path: &Utf8Path,
     choice: ColorChoice,
 ) {
-    policy_diagnostics(diagnostics, input, config_path, color_enabled(choice));
+    super::progress::suspend(|| {
+        policy_diagnostics(diagnostics, input, config_path, color_enabled(choice));
+    });
 }
 
 fn tool_diagnostic(
@@ -105,10 +107,12 @@ pub(crate) fn write_tool_report(
     config_path: &Utf8Path,
     choice: ColorChoice,
 ) {
-    let color = color_enabled(choice);
-    for diagnostic in &report.diagnostics {
-        tool_diagnostic(diagnostic, input, config_path, color);
-    }
+    super::progress::suspend(|| {
+        let color = color_enabled(choice);
+        for diagnostic in &report.diagnostics {
+            tool_diagnostic(diagnostic, input, config_path, color);
+        }
+    });
 }
 
 pub fn operational(errors: &[AnalysisError], input: Option<&AnalysisInput>, choice: ColorChoice) {

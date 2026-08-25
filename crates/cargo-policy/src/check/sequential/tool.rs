@@ -18,7 +18,7 @@ pub(super) fn run(
     let name = tools::name(family);
     let human = options.format == OutputFormat::Human;
     if human {
-        report::progress::started(name);
+        report::progress::started(name, options.color);
     }
     let started = Instant::now();
     let mode = tools::RunMode::fail_fast(options.ignore_warnings);

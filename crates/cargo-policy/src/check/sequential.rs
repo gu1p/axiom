@@ -117,7 +117,7 @@ fn run_semantic(
     }
     let human = options.format == OutputFormat::Human;
     if human {
-        report::progress::started("semantic");
+        report::progress::started("semantic", options.color);
     }
     let started = Instant::now();
     let early = policies.collect_semantic_fail_fast(config, input, facts);
@@ -144,7 +144,7 @@ fn collect(
 ) -> Result<(), Vec<AnalysisError>> {
     let human = options.format == OutputFormat::Human;
     if human {
-        report::progress::started(name);
+        report::progress::started(name, options.color);
     }
     let started = Instant::now();
     let result = operation();
@@ -172,7 +172,7 @@ fn run_policy(
     let name = family.policy_name();
     let human = options.format == OutputFormat::Human;
     if human {
-        report::progress::started(name);
+        report::progress::started(name, options.color);
     }
     let started = Instant::now();
     let mut diagnostics = policies.evaluate(family, facts);
