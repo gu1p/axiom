@@ -15,7 +15,10 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Run repository checks
-        run: make check
+        run: make fmt-check lint test installer-check
+      - name: Enforce repository policy with Axiom
+        if: ${{ always() }}
+        run: make policy-check
 
   tag:
     needs: quality
