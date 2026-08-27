@@ -5,7 +5,11 @@ mod types;
 pub(crate) use config::validate_config;
 
 use std::io::Write as _;
-use std::{env, fs, path::Path, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use policy_core::{AnalysisError, AnalysisInput, CodebaseFacts, FactProvider};
 use toml::Table;
@@ -16,14 +20,21 @@ pub struct SemanticFactProvider {
     config: Option<Table>,
     collect_hir: bool,
     collect_private_dead_code: bool,
+    target_dir: PathBuf,
 }
 
 impl SemanticFactProvider {
-    pub fn new(config: Option<Table>, collect_hir: bool, collect_private_dead_code: bool) -> Self {
+    pub fn new(
+        config: Option<Table>,
+        collect_hir: bool,
+        collect_private_dead_code: bool,
+        target_dir: PathBuf,
+    ) -> Self {
         Self {
             config,
             collect_hir,
             collect_private_dead_code,
+            target_dir,
         }
     }
 
@@ -42,6 +53,7 @@ impl SemanticFactProvider {
             self.config.as_ref(),
             self.collect_hir,
             self.collect_private_dead_code,
+            &self.target_dir,
             facts,
             self.collect_private_dead_code.then_some(stop),
         )
@@ -68,6 +80,7 @@ impl FactProvider for SemanticFactProvider {
                 self.config.as_ref(),
                 self.collect_hir,
                 self.collect_private_dead_code,
+                &self.target_dir,
                 facts,
                 None,
             )

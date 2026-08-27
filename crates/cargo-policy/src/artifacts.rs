@@ -1,35 +1,52 @@
-use core::hash::{Hash as _, Hasher as _};
-use std::{
-    collections::hash_map::DefaultHasher,
-    env,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{path::Path, process::Command};
 
-const CARGO_TARGET_LAYOUT: &str = "cargo-target-v1";
+use policy_core::AnalysisError;
 
-/// Return Axiom's reusable Cargo target directory for one workspace.
+const RUN_PREFIX: &str = "axiom-run-";
+
+/// Owns every compiler artifact created by one `axiom check` invocation.
 ///
-/// An explicit target directory keeps build scripts, incremental state, and
-/// compiler output out of both the inspected workspace and any user-configured
-/// Cargo target directory. `env::temp_dir` honors `TMPDIR` on Unix platforms.
-pub(crate) fn cargo_target_dir(workspace_root: &Path) -> PathBuf {
-    cargo_target_dir_in(&env::temp_dir(), workspace_root)
+/// The directory is unique, shared by all checks in the invocation, and
+/// removed explicitly before Axiom returns. `TempDir` also provides cleanup
+/// during unwinding if execution exits an error path unexpectedly.
+pub(super) struct RunArtifacts {
+    directory: tempfile::TempDir,
 }
 
-pub(crate) fn configure_cargo(command: &mut Command, workspace_root: &Path) {
-    command
-        .arg("--target-dir")
-        .arg(cargo_target_dir(workspace_root));
+impl RunArtifacts {
+    pub(super) fn new() -> Result<Self, AnalysisError> {
+        tempfile::Builder::new()
+            .prefix(RUN_PREFIX)
+            .tempdir()
+            .map(|directory| Self { directory })
+            .map_err(|error| {
+                AnalysisError::new(format!(
+                    "could not create Axiom's temporary artifact directory: {error}"
+                ))
+            })
+    }
+
+    pub(super) fn cargo_target_dir(&self) -> std::path::PathBuf {
+        self.directory.path().join("cargo-target")
+    }
+
+    pub(super) fn semantic_target_dir(&self) -> std::path::PathBuf {
+        self.directory.path().join("semantic-target")
+    }
+
+    pub(super) fn cleanup(self) -> Result<(), AnalysisError> {
+        let path = self.directory.path().to_path_buf();
+        self.directory.close().map_err(|error| {
+            AnalysisError::new(format!(
+                "could not remove Axiom's temporary artifact directory {}: {error}",
+                path.display()
+            ))
+        })
+    }
 }
 
-fn cargo_target_dir_in(temp_root: &Path, workspace_root: &Path) -> PathBuf {
-    let mut hasher = DefaultHasher::new();
-    workspace_root.hash(&mut hasher);
-    temp_root
-        .join("axiom")
-        .join(CARGO_TARGET_LAYOUT)
-        .join(format!("{:016x}", hasher.finish()))
+pub(super) fn configure_cargo(command: &mut Command, target_dir: &Path) {
+    command.arg("--target-dir").arg(target_dir);
 }
 
 #[cfg(test)]

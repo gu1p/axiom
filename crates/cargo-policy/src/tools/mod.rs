@@ -4,6 +4,7 @@ mod rustdoc;
 
 use core::time::Duration;
 use std::env;
+use std::path::Path;
 use std::time::Instant;
 
 use camino::Utf8PathBuf;
@@ -58,6 +59,7 @@ pub fn run_each(
     input: &AnalysisInput,
     config: &ToolConfig,
     selection: Selection,
+    target_dir: &Path,
     mut emit: impl FnMut(RunEvent),
 ) -> Result<(), AnalysisError> {
     for family in [Family::Clippy, Family::Rustdoc] {
@@ -67,7 +69,7 @@ pub fn run_each(
         let name = name(family);
         emit(RunEvent::Started(name));
         let started = Instant::now();
-        let report = run(input, config, family, RunMode::COMPLETE)?;
+        let report = run(input, config, family, RunMode::COMPLETE, target_dir)?;
         emit(RunEvent::Finished(report, started.elapsed()));
     }
     Ok(())
@@ -90,10 +92,11 @@ pub(super) fn run(
     config: &ToolConfig,
     family: Family,
     mode: RunMode,
+    target_dir: &Path,
 ) -> Result<ToolReport, AnalysisError> {
     match family {
-        Family::Clippy => clippy::run(input, &config.clippy, mode),
-        Family::Rustdoc => rustdoc::run(input, &config.clippy, mode),
+        Family::Clippy => clippy::run(input, &config.clippy, mode, target_dir),
+        Family::Rustdoc => rustdoc::run(input, &config.clippy, mode, target_dir),
         _ => unreachable!("native policy families are not external tools"),
     }
 }

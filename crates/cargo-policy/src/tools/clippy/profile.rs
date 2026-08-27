@@ -18,6 +18,7 @@ const CLIPPY_WARN: &[&str] = &[
     "branches-sharing-code",
     "clear-with-drain",
     "clone-on-ref-ptr",
+    "cognitive-complexity",
     "coerce-container-to-any",
     "dbg-macro",
     "debug-assert-with-mut-call",

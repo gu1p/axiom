@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use policy_core::{
     AnalysisError, AnalysisInput, CodebaseFacts, Diagnostic, Engine, FactProvider, Level,
     PolicyConfig, Rule,
@@ -84,12 +86,14 @@ impl Policies {
         &self,
         config: &PolicyConfig,
         input: &AnalysisInput,
+        semantic_target_dir: &Path,
         facts: &mut CodebaseFacts,
     ) -> Result<(), Vec<AnalysisError>> {
         let provider = crate::semantic::SemanticFactProvider::new(
             config.semantic.clone(),
             self.collect_hir,
             self.collect_private_dead_code,
+            semantic_target_dir.to_owned(),
         );
         let engine = Engine::new(vec![Box::new(provider)], Vec::new());
         engine.collect_into(input, facts)
@@ -99,12 +103,14 @@ impl Policies {
         &self,
         config: &PolicyConfig,
         input: &AnalysisInput,
+        semantic_target_dir: &Path,
         facts: &mut CodebaseFacts,
     ) -> Result<Option<Vec<Diagnostic>>, Vec<AnalysisError>> {
         let provider = crate::semantic::SemanticFactProvider::new(
             config.semantic.clone(),
             self.collect_hir,
             self.collect_private_dead_code,
+            semantic_target_dir.to_owned(),
         );
         let mut first = None;
         let stopped = provider.collect_fail_fast_private(input, facts, &mut |current_facts| {

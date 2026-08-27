@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsString;
+use std::path::Path;
 use std::process::Command;
 
 use policy_core::{AnalysisError, AnalysisInput, ClippyConfig};
@@ -13,19 +14,25 @@ pub fn run(
     input: &AnalysisInput,
     config: &ClippyConfig,
     mode: RunMode,
+    target_dir: &Path,
 ) -> Result<ToolReport, AnalysisError> {
-    let mut command = command(input, config, mode.fail_fast);
+    let mut command = command(input, config, mode.fail_fast, target_dir);
     cargo::execute(TOOL_NAME, input, &mut command, mode)
 }
 
-fn command(input: &AnalysisInput, config: &ClippyConfig, fail_fast: bool) -> Command {
+fn command(
+    input: &AnalysisInput,
+    config: &ClippyConfig,
+    fail_fast: bool,
+    target_dir: &Path,
+) -> Command {
     let mut command = Command::new("cargo");
     command
         .current_dir(&input.workspace_root)
         .arg("doc")
         .arg("--manifest-path")
         .arg(input.workspace_root.join("Cargo.toml"));
-    crate::artifacts::configure_cargo(&mut command, input.workspace_root.as_std_path());
+    crate::artifacts::configure_cargo(&mut command, target_dir);
     command.args(["--workspace", "--locked", "--no-deps"]);
     if fail_fast {
         command.args(["--jobs", "1"]);

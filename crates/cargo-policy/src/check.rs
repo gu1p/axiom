@@ -34,9 +34,19 @@ pub fn run(options: &CheckOptions) -> u8 {
         .config_path
         .strip_prefix(&input.workspace_root)
         .unwrap_or(&setup.config_path);
-    let analysis = match analyze(options, &setup, &input, config_path_for_report) {
-        Ok(analysis) => analysis,
-        Err(errors) => return operational(options, &errors, Some(&input)),
+    let artifacts = match crate::artifacts::RunArtifacts::new() {
+        Ok(artifacts) => artifacts,
+        Err(error) => return operational(options, &[error], Some(&input)),
+    };
+    let analysis = analyze(options, &setup, &input, config_path_for_report, &artifacts);
+    let analysis = match (analysis, artifacts.cleanup()) {
+        (Ok(analysis), Ok(())) => analysis,
+        (Err(errors), Ok(())) => return operational(options, &errors, Some(&input)),
+        (Ok(_), Err(error)) => return operational(options, &[error], Some(&input)),
+        (Err(mut errors), Err(error)) => {
+            errors.push(error);
+            return operational(options, &errors, Some(&input));
+        }
     };
     write_result(options, &analysis, &input, &setup.config_path);
     exit_code(&analysis)
@@ -84,6 +94,7 @@ fn analyze(
     setup: &Setup,
     input: &policy_core::AnalysisInput,
     config_path: &camino::Utf8Path,
+    artifacts: &crate::artifacts::RunArtifacts,
 ) -> Result<Analysis, Vec<AnalysisError>> {
     if options.fail_fast {
         sequential::run(
@@ -93,6 +104,7 @@ fn analyze(
             &setup.policies,
             setup.selection,
             config_path,
+            artifacts,
         )
     } else {
         parallel::run(
@@ -102,6 +114,7 @@ fn analyze(
             &setup.policies,
             setup.selection,
             config_path,
+            artifacts,
         )
     }
 }

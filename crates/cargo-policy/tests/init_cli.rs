@@ -1,8 +1,60 @@
 mod support;
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::Command;
 
 use support::TestWorkspace;
+
+const LINT_VALUES_COMMENT: &str =
+    "# Possible values: \"deny\" (error), \"warn\" (warning), \"allow\" (disabled).";
+
+fn clippy_lints(config: &str) -> BTreeMap<String, String> {
+    let policy: toml::Value = toml::from_str(config).expect("valid generated policy");
+    policy["tools"]["clippy"]["lints"]
+        .as_table()
+        .expect("generated Clippy lint catalog")
+        .iter()
+        .map(|(name, level)| {
+            (
+                name.clone(),
+                level.as_str().expect("Clippy lint level").to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn assert_documented_clippy_catalog(config: &str) {
+    let lints = clippy_lints(config);
+    let mut previous = "";
+    let mut documented = 0;
+    for line in config.lines() {
+        if line.starts_with("\"clippy::") {
+            assert_eq!(
+                previous, LINT_VALUES_COMMENT,
+                "missing comment above {line}"
+            );
+            documented += 1;
+        }
+        previous = line;
+    }
+    assert_eq!(
+        documented,
+        lints.len(),
+        "every catalog entry has a values comment"
+    );
+    assert_eq!(lints.len(), 822, "catalog covers the pinned Clippy");
+    assert_eq!(
+        lints["clippy::cognitive_complexity"], "deny",
+        "cognitive complexity is enabled"
+    );
+    assert!(
+        lints
+            .values()
+            .all(|level| level == "deny" || level == "allow"),
+        "every lint is explicitly enabled or disabled"
+    );
+}
 
 fn init_command(workspace: &TestWorkspace) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_axiom"));
@@ -33,6 +85,12 @@ fn init_creates_the_default_policy_and_refuses_to_overwrite_it() {
     assert!(config.contains("profile = \"axiom\""));
     assert!(config.contains("check-docs = true"));
     assert!(config.contains("warnings = \"deny\""));
+    assert_documented_clippy_catalog(&config);
+    let repository_policy =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy.toml"))
+            .expect("repository policy");
+    assert_documented_clippy_catalog(&repository_policy);
+    assert_eq!(clippy_lints(&config), clippy_lints(&repository_policy));
     assert!(config.contains("[[semantic.production]]"));
     assert!(config.contains("# [rules.\"dead-code/public\"]"));
     assert!(config.contains("# [rules.\"visibility/unnecessary-public\"]\n# level = \"deny\""));

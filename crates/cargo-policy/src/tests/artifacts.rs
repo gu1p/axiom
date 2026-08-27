@@ -1,30 +1,35 @@
-use std::{ffi::OsStr, path::Path, process::Command};
+use std::{ffi::OsStr, process::Command};
 
-use super::{CARGO_TARGET_LAYOUT, cargo_target_dir, cargo_target_dir_in, configure_cargo};
+use super::{RunArtifacts, configure_cargo};
 
-#[test]
-fn cargo_artifacts_are_workspace_namespaced_below_platform_temp() {
-    let workspace = Path::new("/workspaces/orders");
-    let target = cargo_target_dir(workspace);
-
-    assert!(target.starts_with(std::env::temp_dir()));
-    assert_eq!(
-        target.parent().and_then(Path::file_name),
-        Some(CARGO_TARGET_LAYOUT.as_ref())
-    );
-    assert_eq!(target, cargo_target_dir(workspace));
-    assert_ne!(
-        target,
-        cargo_target_dir(Path::new("/other/workspaces/orders"))
-    );
+impl RunArtifacts {
+    fn new_in(parent: &std::path::Path) -> Result<Self, policy_core::AnalysisError> {
+        tempfile::Builder::new()
+            .prefix(super::RUN_PREFIX)
+            .tempdir_in(parent)
+            .map(|directory| Self { directory })
+            .map_err(|error| policy_core::AnalysisError::new(error.to_string()))
+    }
 }
 
 #[test]
-fn cargo_artifacts_honor_the_selected_temporary_root() {
-    let temporary_root = Path::new("/selected-tmpdir");
-    let target = cargo_target_dir_in(temporary_root, Path::new("/workspace"));
+fn run_artifacts_are_unique_and_removed_explicitly() {
+    let parent = tempfile::tempdir().expect("temporary root");
+    let first = RunArtifacts::new_in(parent.path()).expect("first run artifacts");
+    let second = RunArtifacts::new_in(parent.path()).expect("second run artifacts");
+    let first_target = first.cargo_target_dir();
+    let second_target = second.cargo_target_dir();
+    let first_root = first_target.parent().expect("artifact root").to_owned();
 
-    assert!(target.starts_with(temporary_root.join("axiom")));
+    assert_ne!(first_target, second_target);
+    assert!(first_root.starts_with(parent.path()));
+    assert_eq!(
+        first.semantic_target_dir().parent(),
+        Some(first_root.as_path())
+    );
+    first.cleanup().expect("clean first run artifacts");
+    assert!(!first_root.exists());
+    second.cleanup().expect("clean second run artifacts");
 }
 
 #[test]
@@ -33,7 +38,7 @@ fn cargo_artifacts_preserve_external_compiler_cache_wrappers() {
     command
         .env("RUSTC_WRAPPER", "kache")
         .env("RUSTC_WORKSPACE_WRAPPER", "workspace-wrapper");
-    configure_cargo(&mut command, Path::new("/workspace"));
+    configure_cargo(&mut command, std::path::Path::new("/temporary/target"));
 
     assert!(
         command
@@ -43,4 +48,9 @@ fn cargo_artifacts_preserve_external_compiler_cache_wrappers() {
     assert!(command.get_envs().any(|(key, value)| {
         key == "RUSTC_WORKSPACE_WRAPPER" && value == Some(OsStr::new("workspace-wrapper"))
     }));
+    assert!(
+        command
+            .get_args()
+            .any(|argument| argument == "/temporary/target")
+    );
 }

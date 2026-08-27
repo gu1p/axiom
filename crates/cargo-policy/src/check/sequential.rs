@@ -10,7 +10,6 @@ use super::policies::Policies;
 use super::selection::{Family, Selection};
 use crate::args::{CheckOptions, OutputFormat};
 use crate::report;
-use crate::tools::{self, ToolReport};
 
 pub(super) fn run(
     options: &CheckOptions,
@@ -19,18 +18,26 @@ pub(super) fn run(
     policies: &Policies,
     selection: Selection,
     config_path: &Utf8Path,
+    artifacts: &crate::artifacts::RunArtifacts,
 ) -> Result<Analysis, Vec<AnalysisError>> {
     let mut facts = CodebaseFacts::default();
     if let Some(analysis) = run_syntax(policies, input, options, config_path, &mut facts)? {
         return Ok(analysis);
     }
-    let tool_reports = match run_selected_tools(config, input, options, selection, config_path)? {
-        ToolStep::Continue(reports) => reports,
-        ToolStep::Stopped(analysis) => return Ok(analysis),
-    };
-    if let Some(diagnostics) =
-        run_semantic(policies, config, input, options, config_path, &mut facts)?
-    {
+    let tool_reports =
+        match tool::run_selected(config, input, options, selection, config_path, artifacts)? {
+            tool::Step::Continue(reports) => reports,
+            tool::Step::Stopped(analysis) => return Ok(analysis),
+        };
+    if let Some(diagnostics) = run_semantic(
+        policies,
+        config,
+        input,
+        options,
+        config_path,
+        &artifacts.semantic_target_dir(),
+        &mut facts,
+    )? {
         return Ok(Analysis {
             diagnostics,
             tool_reports,
@@ -70,43 +77,13 @@ fn run_syntax(
     Ok(None)
 }
 
-enum ToolStep {
-    Continue(Vec<ToolReport>),
-    Stopped(Analysis),
-}
-
-fn run_selected_tools(
-    config: &PolicyConfig,
-    input: &AnalysisInput,
-    options: &CheckOptions,
-    selection: Selection,
-    config_path: &Utf8Path,
-) -> Result<ToolStep, Vec<AnalysisError>> {
-    let mut tool_reports = Vec::new();
-    for family in [Family::Clippy, Family::Rustdoc] {
-        if !tools::enabled(&config.tools, selection, family) {
-            continue;
-        }
-        let report = tool::run(family, config, input, options, config_path)?;
-        let stopped = !report.diagnostics.is_empty();
-        tool_reports.push(report);
-        if stopped {
-            return Ok(ToolStep::Stopped(Analysis {
-                diagnostics: Vec::new(),
-                tool_reports,
-                stopped: true,
-            }));
-        }
-    }
-    Ok(ToolStep::Continue(tool_reports))
-}
-
 fn run_semantic(
     policies: &Policies,
     config: &PolicyConfig,
     input: &AnalysisInput,
     options: &CheckOptions,
     config_path: &Utf8Path,
+    semantic_target_dir: &std::path::Path,
     facts: &mut CodebaseFacts,
 ) -> Result<Option<Vec<policy_core::Diagnostic>>, Vec<AnalysisError>> {
     if !policies.has_semantic() {
@@ -120,7 +97,7 @@ fn run_semantic(
         report::progress::started("semantic", options.color);
     }
     let started = Instant::now();
-    let early = policies.collect_semantic_fail_fast(config, input, facts);
+    let early = policies.collect_semantic_fail_fast(config, input, semantic_target_dir, facts);
     if human {
         if early.is_ok() {
             report::progress::finished("semantic", started.elapsed());

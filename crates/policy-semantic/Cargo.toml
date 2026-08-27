@@ -59,6 +59,7 @@ unreachable_pub = "warn"
 [lints.clippy]
 pedantic = { level = "warn", priority = -2 }
 char_lit_as_u8 = "allow"
+cognitive_complexity = "warn"
 collapsible_else_if = "allow"
 collapsible_if = "allow"
 implicit_hasher = "allow"

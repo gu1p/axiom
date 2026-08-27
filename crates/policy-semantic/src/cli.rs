@@ -5,7 +5,7 @@ use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufReader, PipeReader, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus, Stdio};
@@ -19,8 +19,8 @@ use clap::{ArgMatches, CommandFactory as _, FromArgMatches as _, Parser, Subcomm
 use tempfile::NamedTempFile;
 
 use crate::config::{
-    AnalysisTarget, Config, ConfigDiagnostic, ConfigDiagnosticKind, FeatureProfile,
-    ProductionProduct,
+    AnalysisTarget, AppliedFindings, Config, ConfigDiagnostic, ConfigDiagnosticKind,
+    FeatureProfile, ProductionProduct,
 };
 use crate::diagnostics::{DiagnosticRenderer, EMPHASIS, ERROR, WARNING, styled};
 use crate::graph::{
@@ -68,7 +68,7 @@ struct CheckArgs {
     #[arg(long = "exclude-crate")]
     excluded_crates: Vec<String>,
 
-    /// Reusable Cargo target directory for the instrumented build.
+    /// Cargo target directory for the instrumented build.
     #[arg(long)]
     target_dir: Option<PathBuf>,
 
@@ -507,17 +507,27 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
                 .collect::<Result<Vec<_>>>()
         })
         .transpose()?;
-    let managed_target_dir = args.target_dir.is_none();
-    let target_dir = args.target_dir.as_ref().map_or_else(
-        || Ok(default_target_dir(&workspace_root)),
-        |target_dir| {
-            std::path::absolute(target_dir)
-                .with_context(|| format!("resolve target directory {}", target_dir.display()))
-        },
-    )?;
-    let _target_dir_lock = managed_target_dir
-        .then(|| acquire_managed_target_lock(&target_dir))
+    let temporary_target_dir = args
+        .target_dir
+        .is_none()
+        .then(|| {
+            tempfile::Builder::new()
+                .prefix("axiom-semantic-")
+                .tempdir()
+                .context("create temporary semantic target directory")
+        })
         .transpose()?;
+    let managed_target_dir = temporary_target_dir.is_some();
+    let target_dir = if let Some(target_dir) = &args.target_dir {
+        std::path::absolute(target_dir)
+            .with_context(|| format!("resolve target directory {}", target_dir.display()))?
+    } else {
+        temporary_target_dir
+            .as_ref()
+            .expect("a managed target directory has temporary ownership")
+            .path()
+            .to_owned()
+    };
     fs::create_dir_all(&target_dir)
         .with_context(|| format!("create target directory {}", target_dir.display()))?;
 
@@ -785,7 +795,51 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         ),
     );
     let private_dead_diagnostics = cargo.private_dead_diagnostics.borrow();
-    let mut renderer = DiagnosticRenderer::new(&workspace_root);
+    render_findings(
+        ReportContext {
+            args: &args,
+            lint_levels: &lint_levels,
+            config: &config,
+            toolchain: &toolchain,
+            workspace_root: &workspace_root,
+            production_products: &production_products,
+            stream_private_dead_code,
+        },
+        &production_fragments,
+        &test_fragments,
+        &findings,
+        &private_dead_diagnostics,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct ReportContext<'context, 'product> {
+    args: &'context CheckArgs,
+    lint_levels: &'context LintLevels,
+    config: &'context Config,
+    toolchain: &'context RustToolchain,
+    workspace_root: &'context Path,
+    production_products: &'context [ProductionSelection<'product>],
+    stream_private_dead_code: bool,
+}
+
+fn render_findings(
+    context: ReportContext<'_, '_>,
+    production_fragments: &[Fragment],
+    test_fragments: &[Fragment],
+    findings: &AppliedFindings<'_, '_>,
+    private_dead_diagnostics: &[PrivateDeadDiagnostic],
+) -> Result<ExitCode> {
+    let ReportContext {
+        args,
+        lint_levels,
+        config,
+        toolchain,
+        workspace_root,
+        production_products,
+        stream_private_dead_code,
+    } = context;
+    let mut renderer = DiagnosticRenderer::new(workspace_root);
     let mut json_diagnostics = Vec::new();
     let mut diagnostic_count = 0;
     let mut diagnostic_counts = BTreeMap::<&str, BTreeMap<&str, usize>>::new();
@@ -797,7 +851,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         .map(|finding| finding.definition.id)
         .collect();
     let definition_packages =
-        definition_packages(&production_fragments, &test_fragments, &emitted_finding_ids);
+        definition_packages(production_fragments, test_fragments, &emitted_finding_ids);
     let mut has_denied_diagnostic = false;
     let production_description = if production_products.len() == 1 {
         let product = production_products[0].product;
@@ -848,12 +902,12 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
             has_denied_diagnostic |= level == LintLevel::Deny;
             match args.output_format {
                 OutputFormat::Text => renderer
-                    .write_config_diagnostic(diagnostic, &config, level)
+                    .write_config_diagnostic(diagnostic, config, level)
                     .expect("formatting diagnostics into a string cannot fail"),
                 OutputFormat::Json => json_diagnostics.push(json_config_diagnostic(
                     diagnostic,
-                    &config,
-                    &workspace_root,
+                    config,
+                    workspace_root,
                     level,
                 )),
             }
@@ -871,7 +925,7 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         || "the host target".to_owned(),
         |target| format!("target `{target}`"),
     );
-    let production_summary = production_summary(&production_products, config.feature_profiles());
+    let production_summary = production_summary(production_products, config.feature_profiles());
     match args.output_format {
         OutputFormat::Text => {
             renderer
@@ -2553,66 +2607,6 @@ fn workspace_package<'a>(
     Ok(package)
 }
 
-// Stay below the 255-byte/code-unit component limits of supported filesystems
-// while leaving the ordinary workspace name readable.
-const DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES: usize = 240;
-
-fn semantic_cache_namespace() -> String {
-    let mut hasher = DefaultHasher::new();
-    env!("HAWK_RUSTC_COMMIT_HASH").hash(&mut hasher);
-    format!(
-        "hir-{}-v{}-{:016x}",
-        protocol::VERSION,
-        SEMANTIC_CACHE_LAYOUT_VERSION,
-        hasher.finish()
-    )
-}
-
-fn default_target_dir(workspace_root: &Path) -> PathBuf {
-    let workspace = workspace_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("workspace");
-    let mut hasher = DefaultHasher::new();
-    workspace_root.hash(&mut hasher);
-    let suffix = format!("-{:016x}", hasher.finish());
-    let max_workspace_bytes = DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES - suffix.len();
-    let mut workspace_end = workspace.len().min(max_workspace_bytes);
-    while !workspace.is_char_boundary(workspace_end) {
-        workspace_end -= 1;
-    }
-    let workspace = format!("{}{suffix}", &workspace[..workspace_end]);
-    env::temp_dir()
-        .join("axiom")
-        .join("semantic-target")
-        .join(semantic_cache_namespace())
-        .join(workspace)
-}
-
-fn acquire_managed_target_lock(target_dir: &Path) -> Result<File> {
-    let parent = target_dir
-        .parent()
-        .context("managed semantic target directory has no parent")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create semantic cache directory {}", parent.display()))?;
-    let mut lock_name = target_dir
-        .file_name()
-        .context("managed semantic target directory has no file name")?
-        .to_os_string();
-    lock_name.push(".lock");
-    let lock_path = parent.join(lock_name);
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .with_context(|| format!("open semantic cache lock {}", lock_path.display()))?;
-    lock.lock()
-        .with_context(|| format!("lock semantic cache {}", target_dir.display()))?;
-    Ok(lock)
-}
-
 fn output_indicates_missing_target_artifact(output: &[u8], target_dir: &Path) -> bool {
     let output = String::from_utf8_lossy(output);
     output.contains("No such file or directory")
@@ -2632,12 +2626,6 @@ fn reset_managed_target_dir(target_dir: &Path) -> Result<()> {
     }
     fs::create_dir_all(target_dir)
         .with_context(|| format!("recreate semantic cache {}", target_dir.display()))
-}
-
-pub(crate) fn invalidate_managed_cache(workspace_root: &Path) -> Result<()> {
-    let target_dir = default_target_dir(workspace_root);
-    let _lock = acquire_managed_target_lock(&target_dir)?;
-    reset_managed_target_dir(&target_dir)
 }
 
 fn read_fragments(graph_dir: &Path) -> Result<Vec<Fragment>> {
@@ -2710,12 +2698,10 @@ mod tests {
     #[cfg(unix)]
     use super::normalize_workspace_source_path;
     use super::{
-        Args, CargoInvocation, DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES, DiagnosticRenderer,
-        LintLevel, LintLevels, ProductionProduct, ProductionSelection, WorkspaceLibrarySource,
-        classify_non_production_target, default_target_dir, definition_packages,
-        fix_plan_signature, json_definition_kind, json_finding_kind,
-        output_indicates_missing_target_artifact, semantic_cache_namespace,
-        validate_excluded_crates,
+        Args, CargoInvocation, DiagnosticRenderer, LintLevel, LintLevels, ProductionProduct,
+        ProductionSelection, WorkspaceLibrarySource, classify_non_production_target,
+        definition_packages, fix_plan_signature, json_definition_kind, json_finding_kind,
+        output_indicates_missing_target_artifact, validate_excluded_crates,
     };
 
     fn render_diagnostic(finding: &Finding<'_>) -> String {
@@ -2754,60 +2740,6 @@ mod tests {
     }
 
     #[test]
-    fn default_target_dir_uses_platform_temp_directory() {
-        let workspace_root = Path::new("/path/to/example-workspace");
-        let target_dir = default_target_dir(workspace_root);
-
-        assert_eq!(
-            target_dir
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::parent),
-            Some(std::env::temp_dir().join("axiom").as_path())
-        );
-        assert_eq!(
-            target_dir
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::file_name),
-            Some("semantic-target".as_ref())
-        );
-        assert_eq!(
-            target_dir.parent().and_then(Path::file_name),
-            Some(semantic_cache_namespace().as_ref())
-        );
-        assert!(
-            target_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("example-workspace-"))
-        );
-        assert_ne!(
-            target_dir,
-            default_target_dir(Path::new("/another/path/to/example-workspace"))
-        );
-    }
-
-    #[test]
-    fn default_target_dir_is_namespaced_by_protocol_cache_and_rustc() {
-        let namespace = semantic_cache_namespace();
-
-        assert!(namespace.starts_with(&format!(
-            "hir-{}-v{}-",
-            crate::protocol::VERSION,
-            super::SEMANTIC_CACHE_LAYOUT_VERSION
-        )));
-        assert_eq!(
-            namespace
-                .rsplit_once('-')
-                .expect("namespace has a version hash")
-                .1
-                .len(),
-            16
-        );
-    }
-
-    #[test]
     fn missing_generated_target_artifact_is_recoverable_cache_failure() {
         let target_dir = Path::new("/tmp/axiom-semantic-target/example");
         let output = format!(
@@ -2838,53 +2770,6 @@ mod tests {
             error.to_string(),
             "unknown --exclude-crate value(s): `foo`; this workspace has no library crates"
         );
-    }
-
-    #[test]
-    fn default_target_dir_truncates_long_workspace_names() {
-        let workspace = "a".repeat(245);
-        let workspace_root = PathBuf::from("/path/to").join(&workspace);
-        let other_workspace_root = PathBuf::from("/another/path/to").join(&workspace);
-        let target_dir = default_target_dir(&workspace_root);
-        let other_target_dir = default_target_dir(&other_workspace_root);
-        let component = target_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("UTF-8 target directory component");
-        let other_component = other_target_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("UTF-8 target directory component");
-
-        assert_eq!(component.len(), DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES);
-        let (workspace, suffix) = component
-            .rsplit_once('-')
-            .expect("target directory has a hash suffix");
-        assert_eq!(
-            workspace,
-            "a".repeat(DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES - suffix.len() - 1)
-        );
-        assert_eq!(suffix.len(), 16);
-        assert!(suffix.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        assert_ne!(component, other_component);
-    }
-
-    #[test]
-    fn default_target_dir_truncates_at_a_utf8_boundary() {
-        let workspace_root = PathBuf::from("/path/to").join("é".repeat(123));
-        let target_dir = default_target_dir(&workspace_root);
-        let component = target_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("UTF-8 target directory component");
-        let (workspace, suffix) = component
-            .rsplit_once('-')
-            .expect("target directory has a hash suffix");
-
-        assert!(component.len() <= DEFAULT_TARGET_DIR_COMPONENT_MAX_BYTES);
-        assert!(!workspace.is_empty());
-        assert!(workspace.chars().all(|character| character == 'é'));
-        assert_eq!(suffix.len(), 16);
     }
 
     #[test]

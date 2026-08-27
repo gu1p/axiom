@@ -39,16 +39,16 @@ pub(super) fn run(
     let read = match read_events(input, facts, stdout, stop_on_private) {
         Ok(read) => read,
         Err(error) => {
-            stop_process(&mut child, input)?;
+            stop_process(&mut child)?;
             return Err(error);
         }
     };
     match read {
         ReadOutcome::Stopped => {
-            stop_process(&mut child, input)?;
+            stop_process(&mut child)?;
             Ok(Outcome::Stopped)
         }
-        ReadOutcome::Complete(report) => finish(input, child, &stderr, report),
+        ReadOutcome::Complete(report) => finish(child, &stderr, report),
     }
 }
 
@@ -129,7 +129,6 @@ fn handle_event(
 }
 
 fn finish(
-    input: &AnalysisInput,
     mut child: Child,
     stderr: &tempfile::NamedTempFile,
     report: Option<SemanticReport>,
@@ -139,7 +138,6 @@ fn finish(
     })?;
     if !status.success() {
         let detail = std::fs::read_to_string(stderr.path()).unwrap_or_default();
-        invalidate_cache(input)?;
         return Err(AnalysisError::new(if detail.trim().is_empty() {
             format!("semantic analysis failed with {status}")
         } else {
@@ -149,25 +147,12 @@ fn finish(
     if let Some(report) = report {
         Ok(Outcome::Complete(report))
     } else {
-        invalidate_cache(input)?;
         Err(AnalysisError::new(
             "semantic analysis stream ended before completion",
         ))
     }
 }
 
-fn stop_process(
-    child: &mut std::process::Child,
-    input: &AnalysisInput,
-) -> Result<(), AnalysisError> {
-    terminate_group(child)?;
-    invalidate_cache(input)
-}
-
-fn invalidate_cache(input: &AnalysisInput) -> Result<(), AnalysisError> {
-    policy_semantic::invalidate_managed_cache(input.workspace_root.as_std_path()).map_err(|error| {
-        AnalysisError::new(format!(
-            "could not invalidate interrupted semantic cache: {error}"
-        ))
-    })
+fn stop_process(child: &mut std::process::Child) -> Result<(), AnalysisError> {
+    terminate_group(child)
 }

@@ -1,6 +1,7 @@
 mod reporting;
 
 use core::time::Duration;
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -65,6 +66,7 @@ pub(super) fn run(
     policies: &Policies,
     selection: Selection,
     config_path: &Utf8Path,
+    artifacts: &crate::artifacts::RunArtifacts,
 ) -> Result<Analysis, Vec<AnalysisError>> {
     let run_policies = !policies.is_empty();
     let run_tools = crate::tools::any_enabled(&config.tools, selection);
@@ -73,21 +75,29 @@ pub(super) fn run(
     }
     let (sender, receiver) = mpsc::channel();
     let mut state = State::new(!run_policies, !run_tools);
+    let semantic_target_dir = artifacts.semantic_target_dir();
+    let cargo_target_dir = artifacts.cargo_target_dir();
     std::thread::scope(|scope| {
         if run_policies {
             let sender = sender.clone();
             scope.spawn(move || {
                 let started = Instant::now();
-                let result = analyze_policies(policies, config, input);
+                let result = analyze_policies(policies, config, input, &semantic_target_dir);
                 let _ = sender.send(Event::Policies(result, started.elapsed()));
             });
         }
         if run_tools {
             let sender = sender.clone();
             scope.spawn(move || {
-                let result = crate::tools::run_each(input, &config.tools, selection, |event| {
-                    let _ = sender.send(Event::Tool(event));
-                });
+                let result = crate::tools::run_each(
+                    input,
+                    &config.tools,
+                    selection,
+                    &cargo_target_dir,
+                    |event| {
+                        let _ = sender.send(Event::Tool(event));
+                    },
+                );
                 let _ = sender.send(Event::ToolsComplete(result));
             });
         }
@@ -101,13 +111,14 @@ fn analyze_policies(
     policies: &Policies,
     config: &PolicyConfig,
     input: &AnalysisInput,
+    semantic_target_dir: &Path,
 ) -> Result<Vec<Diagnostic>, Vec<AnalysisError>> {
     let mut facts = CodebaseFacts::default();
     if policies.has_syntax() {
         Policies::collect_syntax(input, &mut facts)?;
     }
     if policies.has_semantic() {
-        policies.collect_semantic(config, input, &mut facts)?;
+        policies.collect_semantic(config, input, semantic_target_dir, &mut facts)?;
     }
     Ok(policies.evaluate_all(&facts))
 }

@@ -181,18 +181,20 @@ Source globs are evaluated against forward-slash workspace-relative paths; norma
 
 ## Temporary artifacts
 
-While `axiom check` runs, every Axiom-owned cache, compiler artifact, build-script output, and
-temporary analysis file stays inside the platform temporary directory. On macOS and Unix that is
-the directory selected by `$TMPDIR` (with the operating-system fallback used when it is unset).
-Reusable Cargo and semantic build caches are workspace-namespaced below `$TMPDIR/axiom`, and Axiom
-passes Cargo an explicit `--target-dir`; a workspace `.cargo/config.toml` or inherited
-`CARGO_TARGET_DIR` therefore cannot put Axiom's build artifacts elsewhere. External compiler caches
-such as `kache` remain user-managed and are reused by ordinary Axiom Cargo checks; Axiom does not
-move or modify their storage.
+Each `axiom check` owns a unique run directory in the platform temporary directory. On macOS and
+Unix, its location is selected by `$TMPDIR` (with the operating-system fallback used when it is
+unset). Clippy, rustdoc, semantic compiler artifacts, build-script output, and temporary analysis
+files stay inside that directory. Clippy and rustdoc share one Cargo target directory during the
+run, while semantic analysis uses an isolated target directory.
 
-Semantic compiler lanes and extracted facts are reused from that temporary cache. They are
-invalidated by relevant Cargo metadata, policy settings, the pinned compiler, or the semantic cache
-schema—not merely because Axiom received a new release version.
+Axiom explicitly removes the complete run directory before returning after a successful check, a
+policy violation, fail-fast termination, or an operational error. It also passes Cargo explicit
+`--target-dir` values, so a workspace `.cargo/config.toml` or inherited `CARGO_TARGET_DIR` cannot put
+these artifacts elsewhere. The standalone semantic analyzer uses the same temporary ownership when
+`--target-dir` is omitted; a directory supplied explicitly by the user is preserved.
+
+External compiler caches such as `kache` remain user-managed and can be reused by Axiom's Cargo
+checks; Axiom does not move, clean, or modify their storage.
 
 Cargo's downloaded dependency cache and installed Rust toolchains remain in the user-managed
 `CARGO_HOME` and `RUSTUP_HOME`. They are shared prerequisites rather than artifacts created for an
@@ -217,8 +219,16 @@ warnings = "deny"
 The wrapped command uses `cargo clippy --workspace --locked --no-deps --keep-going`, adds
 `--all-targets` by default, and denies warnings. The default `axiom` profile enables strict Rust
 lints, `clippy::all`, `clippy::cargo`, `clippy::pedantic`, selected restriction and nursery lints,
-and the documented low-signal exceptions. It also runs `cargo doc` with `rustdoc::all`. See the
-[complete built-in lint profile](docs/clippy-profile.md).
+and the documented low-signal exceptions. Cognitive complexity is limited to Clippy's default of
+25; the former `cyclomatic_complexity` lint is the same check under its old name. Workspaces can
+change the limit with `cognitive-complexity-threshold` in `clippy.toml`. The profile also runs
+`cargo doc` with `rustdoc::all`. See the [complete built-in lint profile](docs/clippy-profile.md).
+
+`axiom init` also writes an alphabetized `[tools.clippy.lints]` catalog containing all 822
+individual lints exposed by the pinned Clippy. Every lint has an explicit `deny` or `allow` value
+matching the Axiom profile, with a comment immediately above it documenting all supported values.
+This makes changing a lint a one-line edit and makes toolchain upgrades expose catalog drift in the
+test suite.
 
 For a workspace whose valid build needs selected features:
 
@@ -236,12 +246,19 @@ the workspace; execution coverage and the `warnings` policy still apply. Set `en
 only when another required system owns Clippy execution. If the component is missing, install it
 with `rustup component add clippy`.
 
-Override one compiler, Clippy, or rustdoc lint without replacing the built-in profile:
+The generated per-lint catalog is still explicit policy. Remove its entries as well when switching
+to `profile = "workspace"` specifically to let Cargo manifests own every lint level.
+
+Edit an existing Clippy entry, or add a compiler or rustdoc entry, without replacing the built-in
+profile:
 
 ```toml
 [tools.clippy.lints]
+# Possible values: "deny" (error), "warn" (warning), "allow" (disabled).
 "clippy::unwrap_used" = "deny"
+# Possible values: "deny" (error), "warn" (warning), "allow" (disabled).
 "clippy::needless_return" = "allow"
+# Possible values: "deny" (error), "warn" (warning), "allow" (disabled).
 "rustdoc::broken_intra_doc_links" = "warn"
 ```
 

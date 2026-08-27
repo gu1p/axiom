@@ -1,18 +1,3 @@
-version = 1
-
-[sources]
-include = ["**/*.rs"]
-exclude = ["crates/policy-semantic/**"]
-test = ["**/tests.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests/**/*.rs"]
-
-[tools.clippy]
-enabled = true
-profile = "axiom"
-check-docs = true
-targets = "all"
-features = "default"
-warnings = "deny"
-
 # Generated from Clippy 1.98.0 (`clippy-driver -W help`).
 # Regenerate this catalog when the pinned Rust toolchain changes.
 [tools.clippy.lints]
@@ -2482,35 +2467,3 @@ warnings = "deny"
 
 # Possible values: "deny" (error), "warn" (warning), "allow" (disabled).
 "clippy::zst_offset" = "deny"
-
-
-[rules."size/function-max-lines"]
-level = "deny"
-limit = 50
-scope = "production"
-
-[rules."size/file-max-lines"]
-level = "deny"
-limit = 200
-scope = "production"
-
-[rules."testing/separate-test-files"]
-level = "deny"
-
-[rules."dead-code/private"]
-level = "warn"
-
-[rules."dead-code/public"]
-level = "warn"
-
-[rules."dead-code/test-only"]
-level = "warn"
-
-[rules."visibility/unnecessary-public"]
-level = "deny"
-
-[rules."visibility/unnecessary-restricted"]
-level = "warn"
-
-[rules."visibility/unnecessary-crate"]
-level = "warn"

@@ -1,6 +1,6 @@
 mod stream;
 
-use std::{env, process::Command};
+use std::{env, path::Path, process::Command};
 
 use policy_core::{
     AnalysisError, AnalysisInput, CodebaseFacts, SemanticFindingFact, SemanticFindingKind,
@@ -20,6 +20,7 @@ pub(super) fn collect(
     config: Option<&Table>,
     collect_hir: bool,
     collect_private_dead_code: bool,
+    target_dir: &Path,
     facts: &mut CodebaseFacts,
     stop_on_private: Option<&mut dyn FnMut(&CodebaseFacts) -> bool>,
 ) -> Result<bool, AnalysisError> {
@@ -29,6 +30,7 @@ pub(super) fn collect(
         collect_hir,
         collect_private_dead_code,
         stop_on_private.is_some(),
+        target_dir,
     )?;
     let report = if let Some(stop) = stop_on_private {
         match stream::run(input, facts, &mut command, stop)? {
@@ -60,6 +62,7 @@ fn analyzer_command(
     collect_hir: bool,
     collect_private_dead_code: bool,
     stream_private_dead_code: bool,
+    target_dir: &Path,
 ) -> Result<(Option<tempfile::NamedTempFile>, Command), AnalysisError> {
     let (config_file, excluded_crates) = semantic_config_file(config)?;
     let executable = env::current_exe()
@@ -70,6 +73,8 @@ fn analyzer_command(
         .arg("check")
         .arg("--manifest-path")
         .arg(input.workspace_root.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(target_dir)
         .args(["--output-format", "json", "--color", "never"])
         .args(["-W", "hawk::test_only"])
         .args(["-W", "hawk::unnecessary_crate_visibility"])

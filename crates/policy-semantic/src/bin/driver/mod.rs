@@ -540,6 +540,16 @@ struct FragmentContext {
     collection_options: CollectionOptions,
 }
 
+type SourceItemFields = Vec<(u32, u32, Vec<(Symbol, LocalDefId)>)>;
+
+struct DefinitionCollection {
+    definitions: Vec<Definition>,
+    adt_members: Vec<(LocalDefId, LocalDefId)>,
+    source_item_fields: SourceItemFields,
+    generated_fields: Vec<LocalDefId>,
+    public_reexports: Vec<LocalDefId>,
+}
+
 fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
     let FragmentContext {
         package_name,
@@ -551,6 +561,53 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
         non_production_consumer,
         collection_options,
     } = context;
+    let DefinitionCollection {
+        definitions,
+        adt_members,
+        source_item_fields,
+        generated_fields,
+        public_reexports,
+    } = collect_definitions(tcx, &crate_name, test_surface, collection_options);
+    let edges = collect_edges(tcx, adt_members, source_item_fields, generated_fields);
+    let required_public_roots = required_public_roots(
+        tcx,
+        &definitions,
+        &edges,
+        public_reexports,
+        tcx.crate_types().contains(&CrateType::ProcMacro),
+    );
+    let roots = tcx
+        .entry_fn(())
+        .filter(|_| is_product_root)
+        .map(|(def_id, _)| vec![id(tcx, def_id)])
+        .unwrap_or_default();
+    let conservative_roots = conservative_roots(tcx, &definitions);
+
+    Fragment {
+        protocol_version: crate::protocol::ProtocolVersion,
+        package_name,
+        crate_name,
+        compilation_target: tcx.sess.opts.target_triple.tuple().to_owned(),
+        crate_id,
+        crate_root: span(tcx, CRATE_DEF_ID).map(|span| span.file),
+        is_product_root,
+        product_root_kind: root_kind,
+        test_surface,
+        non_production_consumer,
+        definitions,
+        edges,
+        roots,
+        conservative_roots,
+        required_public_roots,
+    }
+}
+
+fn collect_definitions(
+    tcx: TyCtxt<'_>,
+    crate_name: &str,
+    test_surface: bool,
+    collection_options: CollectionOptions,
+) -> DefinitionCollection {
     let mut definitions = Vec::new();
     let mut defined = HashSet::new();
     let mut adt_members = Vec::new();
@@ -558,7 +615,6 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
     let mut generated_fields = Vec::new();
     let mut public_reexports = Vec::new();
     let crate_items = tcx.hir_crate_items(());
-    let is_proc_macro_crate = tcx.crate_types().contains(&CrateType::ProcMacro);
 
     for owner in crate_items.owners() {
         let def_id = owner.def_id;
@@ -580,7 +636,7 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
         definitions.push(definition(
             tcx,
             def_id,
-            &crate_name,
+            crate_name,
             kind.unwrap_or(DefinitionKind::Other),
             public_api,
             visibility.as_deref(),
@@ -633,7 +689,7 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
                     let mut field_definition = definition(
                         tcx,
                         field.def_id,
-                        &crate_name,
+                        crate_name,
                         DefinitionKind::Field,
                         public_api,
                         visibility.as_deref(),
@@ -652,7 +708,7 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
                     definitions.push(definition(
                         tcx,
                         variant.def_id,
-                        &crate_name,
+                        crate_name,
                         DefinitionKind::EnumVariant,
                         is_public_variant(tcx, variant.def_id, test_surface),
                         visibility_modifier(tcx, variant.def_id).as_deref(),
@@ -671,7 +727,7 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
             definitions.push(definition(
                 tcx,
                 def_id,
-                &crate_name,
+                crate_name,
                 DefinitionKind::Other,
                 false,
                 visibility_modifier(tcx, def_id).as_deref(),
@@ -680,6 +736,22 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
         }
     }
 
+    DefinitionCollection {
+        definitions,
+        adt_members,
+        source_item_fields,
+        generated_fields,
+        public_reexports,
+    }
+}
+
+fn collect_edges(
+    tcx: TyCtxt<'_>,
+    adt_members: Vec<(LocalDefId, LocalDefId)>,
+    mut source_item_fields: SourceItemFields,
+    generated_fields: Vec<LocalDefId>,
+) -> Vec<Edge> {
+    let crate_items = tcx.hir_crate_items(());
     let mut edges = Vec::new();
     for def_id in tcx.hir_body_owners() {
         let body = tcx.hir_body_owned_by(def_id);
@@ -709,54 +781,7 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
         );
         visitor.visit_node(tcx.hir_node_by_def_id(def_id));
         visitor.finish(&mut edges);
-        if let Some(trait_item) = tcx.trait_item_of(def_id.to_def_id())
-            && let Some(trait_def_id) = tcx.trait_of_assoc(trait_item)
-        {
-            let trait_id = id(tcx, trait_def_id);
-            let exposed_types: Vec<_> = edges[edge_start..]
-                .iter()
-                .filter(|edge| edge.kind == EdgeKind::Interface)
-                .map(|edge| edge.to)
-                .collect();
-            edges.extend(exposed_types.into_iter().map(|target| Edge {
-                from: trait_id,
-                to: target,
-                kind: EdgeKind::VisibilityRequirement,
-            }));
-        }
-        if let Some(parent) = enclosing_module(tcx, def_id) {
-            edges.push(Edge {
-                from: id(tcx, def_id.to_def_id()),
-                to: id(tcx, parent.to_def_id()),
-                kind: EdgeKind::VisibilityParent,
-            });
-        }
-        if matches!(
-            diagnostic_kind(tcx, def_id),
-            Some(DefinitionKind::InherentMethod | DefinitionKind::InherentAssociatedConstant)
-        ) && let ty::Adt(adt, _) = tcx
-            .type_of(tcx.local_parent(def_id))
-            .instantiate_identity()
-            .skip_norm_wip()
-            .kind()
-        {
-            edges.push(Edge {
-                from: id(tcx, def_id.to_def_id()),
-                to: id(tcx, adt.did()),
-                kind: EdgeKind::Interface,
-            });
-        }
-        if matches!(
-            tcx.def_kind(def_id),
-            DefKind::AssocFn | DefKind::AssocConst { .. } | DefKind::AssocTy
-        ) && matches!(tcx.def_kind(tcx.local_parent(def_id)), DefKind::Trait)
-        {
-            edges.push(Edge {
-                from: id(tcx, def_id.to_def_id()),
-                to: id(tcx, tcx.local_parent(def_id).to_def_id()),
-                kind: EdgeKind::Interface,
-            });
-        }
+        extend_owner_edges(tcx, def_id, edge_start, &mut edges);
     }
     for item_id in crate_items.free_items() {
         let item = tcx.hir_item(item_id);
@@ -786,27 +811,11 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
     // source field, as `rkyv::Archived<T>` does. HIR cannot prove that macro
     // relationship, so conservatively retain same-named source visibility when
     // the expansion callsite identifies its decorated item.
-    edges.extend(generated_fields.into_iter().filter_map(|field| {
-        let span = tcx.def_span(field);
-        if !matches!(
-            span.ctxt().outer_expn_data().kind,
-            ExpnKind::Macro(MacroKind::Derive, _)
-        ) {
-            return None;
-        }
-        let source_callsite = span.source_callsite();
-        let source_file = source_file_start(tcx, source_callsite);
-        let source_position = source_callsite.hi().to_u32();
-        let name = tcx.item_name(field.to_def_id());
-        source_item_at_or_after(&source_item_fields, source_file, source_position)?
-            .iter()
-            .find(|(source_name, _)| *source_name == name)
-            .map(|(_, source_field)| Edge {
-                from: id(tcx, field.to_def_id()),
-                to: id(tcx, source_field.to_def_id()),
-                kind: EdgeKind::VisibilityRequirement,
-            })
-    }));
+    edges.extend(
+        generated_fields
+            .into_iter()
+            .filter_map(|field| generated_field_visibility_edge(tcx, field, &source_item_fields)),
+    );
 
     edges.sort_by(|left, right| {
         (&left.from, &left.to, left.kind as u8).cmp(&(&right.from, &right.to, right.kind as u8))
@@ -814,6 +823,99 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
     edges.dedup_by(|left, right| {
         left.from == right.from && left.to == right.to && left.kind == right.kind
     });
+    edges
+}
+
+fn extend_owner_edges(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    edge_start: usize,
+    edges: &mut Vec<Edge>,
+) {
+    if let Some(trait_item) = tcx.trait_item_of(def_id.to_def_id())
+        && let Some(trait_def_id) = tcx.trait_of_assoc(trait_item)
+    {
+        let trait_id = id(tcx, trait_def_id);
+        let exposed_types: Vec<_> = edges[edge_start..]
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Interface)
+            .map(|edge| edge.to)
+            .collect();
+        edges.extend(exposed_types.into_iter().map(|target| Edge {
+            from: trait_id,
+            to: target,
+            kind: EdgeKind::VisibilityRequirement,
+        }));
+    }
+    if let Some(parent) = enclosing_module(tcx, def_id) {
+        edges.push(Edge {
+            from: id(tcx, def_id.to_def_id()),
+            to: id(tcx, parent.to_def_id()),
+            kind: EdgeKind::VisibilityParent,
+        });
+    }
+    if matches!(
+        diagnostic_kind(tcx, def_id),
+        Some(DefinitionKind::InherentMethod | DefinitionKind::InherentAssociatedConstant)
+    ) && let ty::Adt(adt, _) = tcx
+        .type_of(tcx.local_parent(def_id))
+        .instantiate_identity()
+        .skip_norm_wip()
+        .kind()
+    {
+        edges.push(Edge {
+            from: id(tcx, def_id.to_def_id()),
+            to: id(tcx, adt.did()),
+            kind: EdgeKind::Interface,
+        });
+    }
+    if matches!(
+        tcx.def_kind(def_id),
+        DefKind::AssocFn | DefKind::AssocConst { .. } | DefKind::AssocTy
+    ) && matches!(tcx.def_kind(tcx.local_parent(def_id)), DefKind::Trait)
+    {
+        edges.push(Edge {
+            from: id(tcx, def_id.to_def_id()),
+            to: id(tcx, tcx.local_parent(def_id).to_def_id()),
+            kind: EdgeKind::Interface,
+        });
+    }
+}
+
+fn generated_field_visibility_edge(
+    tcx: TyCtxt<'_>,
+    field: LocalDefId,
+    source_item_fields: &SourceItemFields,
+) -> Option<Edge> {
+    let span = tcx.def_span(field);
+    if !matches!(
+        span.ctxt().outer_expn_data().kind,
+        ExpnKind::Macro(MacroKind::Derive, _)
+    ) {
+        return None;
+    }
+    let source_callsite = span.source_callsite();
+    let source_file = source_file_start(tcx, source_callsite);
+    let source_position = source_callsite.hi().to_u32();
+    let name = tcx.item_name(field.to_def_id());
+    source_item_at_or_after(source_item_fields, source_file, source_position)?
+        .iter()
+        .find(|(source_name, _)| *source_name == name)
+        .map(|(_, source_field)| Edge {
+            from: id(tcx, field.to_def_id()),
+            to: id(tcx, source_field.to_def_id()),
+            kind: EdgeKind::VisibilityRequirement,
+        })
+}
+
+fn required_public_roots(
+    tcx: TyCtxt<'_>,
+    definitions: &[Definition],
+    edges: &[Edge],
+    public_reexports: Vec<LocalDefId>,
+    is_proc_macro_crate: bool,
+) -> Vec<DefinitionId> {
+    let crate_items = tcx.hir_crate_items(());
     // Lowering a type exposed by a public trait impl can fail privacy checking
     // even when the selected product does not otherwise reference that type.
     // This includes concrete types exposed by refined `impl Trait` methods.
@@ -837,7 +939,7 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
         .filter(|definition| definition.kind == DefinitionKind::TypeAlias)
         .map(|definition| definition.id)
         .collect();
-    let interface_targets = type_alias_interface_targets(&edges, &type_aliases);
+    let interface_targets = type_alias_interface_targets(edges, &type_aliases);
     let mut pending_required_public_roots: Vec<DefinitionId> = edges
         .iter()
         .filter(|edge| {
@@ -897,11 +999,11 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
     }
     required_public_roots.sort();
     required_public_roots.dedup();
-    let roots = tcx
-        .entry_fn(())
-        .filter(|_| is_product_root)
-        .map(|(def_id, _)| vec![id(tcx, def_id)])
-        .unwrap_or_default();
+    required_public_roots
+}
+
+fn conservative_roots(tcx: TyCtxt<'_>, definitions: &[Definition]) -> Vec<DefinitionId> {
+    let crate_items = tcx.hir_crate_items(());
     let mut conservative_roots: Vec<DefinitionId> = tcx
         .hir_body_owners()
         .filter(|def_id| {
@@ -950,24 +1052,7 @@ fn collect_fragment(tcx: TyCtxt<'_>, context: FragmentContext) -> Fragment {
     );
     conservative_roots.sort();
     conservative_roots.dedup();
-
-    Fragment {
-        protocol_version: crate::protocol::ProtocolVersion,
-        package_name,
-        crate_name,
-        compilation_target: tcx.sess.opts.target_triple.tuple().to_owned(),
-        crate_id,
-        crate_root: span(tcx, CRATE_DEF_ID).map(|span| span.file),
-        is_product_root,
-        product_root_kind: root_kind,
-        test_surface,
-        non_production_consumer,
-        definitions,
-        edges,
-        roots,
-        conservative_roots,
-        required_public_roots,
-    }
+    conservative_roots
 }
 
 fn is_public_candidate_with_visibility(
