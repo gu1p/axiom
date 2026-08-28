@@ -136,6 +136,97 @@ fn directory_line_fixture(constants: usize) -> String {
     source
 }
 
+fn write_directory_file_limit_boundary(workspace: &TestWorkspace) {
+    for name in ["a", "b", "c", "d"] {
+        write_rust_source(workspace, &format!("src/{name}.rs"), "pub fn item() {}\n");
+    }
+    write_rust_source(
+        workspace,
+        "src/ignored_tests.rs",
+        "pub fn test_support() {}\n",
+    );
+    for name in ["a", "b", "c", "d", "e"] {
+        write_rust_source(
+            workspace,
+            &format!("src/domain/{name}.rs"),
+            "pub fn item() {}\n",
+        );
+    }
+}
+
+fn assert_directory_file_limit_boundary(workspace: &TestWorkspace) {
+    let boundary = command(workspace)
+        .arg("--size")
+        .output()
+        .expect("run directory boundary policy");
+    assert!(
+        boundary.status.success(),
+        "directory at the configured file limit should pass: {}",
+        String::from_utf8_lossy(&boundary.stderr)
+    );
+}
+
+fn assert_directory_file_limit_json_violation(workspace: &TestWorkspace) {
+    let output = command(workspace)
+        .args(["--size", "--format", "json"])
+        .output()
+        .expect("run directory file policy");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "directory over the configured file limit should fail"
+    );
+    let document: Value = serde_json::from_slice(&output.stdout).expect("directory JSON");
+    let diagnostics = document["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "file-limit violation should emit one diagnostic"
+    );
+    assert_eq!(
+        diagnostics[0]["rule_id"], "size/directory-max-files",
+        "diagnostic should identify the directory file-limit rule"
+    );
+    assert_eq!(
+        diagnostics[0]["path"], "src/domain/f.rs",
+        "diagnostic should point to the first file over the limit"
+    );
+    assert_eq!(
+        diagnostics[0]["observed"], 6,
+        "diagnostic should report the observed production-file count"
+    );
+    assert_eq!(
+        diagnostics[0]["limit"], 5,
+        "diagnostic should report the configured file limit"
+    );
+    assert_eq!(
+        diagnostics[0]["unit"], "files",
+        "diagnostic should express the count in files"
+    );
+    assert!(
+        diagnostics[0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("src/domain")),
+        "diagnostic message should name the limited directory"
+    );
+}
+
+fn assert_directory_file_limit_human_violation(workspace: &TestWorkspace) {
+    let human = command(workspace)
+        .arg("--size")
+        .output()
+        .expect("run human directory file policy");
+    assert_eq!(
+        human.status.code(),
+        Some(1),
+        "human output should fail for a directory over the file limit"
+    );
+    assert!(
+        String::from_utf8_lossy(&human.stderr).contains("limit: 5 files"),
+        "human diagnostic should report the configured file limit"
+    );
+}
+
 #[test]
 fn clean_workspace_passes_with_human_summary() {
     let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 50, 200);
@@ -275,54 +366,12 @@ fn file_limit_is_inclusive() {
 fn directory_file_limit_checks_each_level_and_excludes_test_files() {
     let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 50, 200);
     write_directory_policy(&workspace);
-    for name in ["a", "b", "c", "d"] {
-        write_rust_source(&workspace, &format!("src/{name}.rs"), "pub fn item() {}\n");
-    }
-    write_rust_source(
-        &workspace,
-        "src/ignored_tests.rs",
-        "pub fn test_support() {}\n",
-    );
-    for name in ["a", "b", "c", "d", "e"] {
-        write_rust_source(
-            &workspace,
-            &format!("src/domain/{name}.rs"),
-            "pub fn item() {}\n",
-        );
-    }
-
-    let boundary = command(&workspace)
-        .arg("--size")
-        .output()
-        .expect("run directory boundary policy");
-    assert!(boundary.status.success());
+    write_directory_file_limit_boundary(&workspace);
+    assert_directory_file_limit_boundary(&workspace);
 
     write_rust_source(&workspace, "src/domain/f.rs", "pub fn item() {}\n");
-    let output = command(&workspace)
-        .args(["--size", "--format", "json"])
-        .output()
-        .expect("run directory file policy");
-    assert_eq!(output.status.code(), Some(1));
-    let document: Value = serde_json::from_slice(&output.stdout).expect("directory JSON");
-    let diagnostics = document["diagnostics"].as_array().expect("diagnostics");
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0]["rule_id"], "size/directory-max-files");
-    assert_eq!(diagnostics[0]["path"], "src/domain/f.rs");
-    assert_eq!(diagnostics[0]["observed"], 6);
-    assert_eq!(diagnostics[0]["limit"], 5);
-    assert_eq!(diagnostics[0]["unit"], "files");
-    assert!(
-        diagnostics[0]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("src/domain"))
-    );
-
-    let human = command(&workspace)
-        .arg("--size")
-        .output()
-        .expect("run human directory file policy");
-    assert_eq!(human.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&human.stderr).contains("limit: 5 files"));
+    assert_directory_file_limit_json_violation(&workspace);
+    assert_directory_file_limit_human_violation(&workspace);
 }
 
 #[test]
@@ -612,15 +661,20 @@ fn axiom_profile_enables_cherry_picked_clippy_lints() {
 
 #[test]
 fn axiom_profile_enforces_cognitive_complexity() {
-    let conditions = (0..26)
+    let conditions = (0..12)
         .map(|index| format!("    if bits[{index}] {{ count += 1; }}"))
         .collect::<Vec<_>>()
         .join("\n");
     let source = format!(
-        "//! Fixture docs.\npub fn count(bits: [bool; 26]) -> usize {{\n    let mut count = 0;\n{conditions}\n    count\n}}\n"
+        "//! Fixture docs.\npub fn count(bits: [bool; 12]) -> usize {{\n    let mut count = 0;\n{conditions}\n    count\n}}\n"
     );
     let workspace = TestWorkspace::new(&source, "deny", 50, 200);
     write_clippy_policy(&workspace, true, true);
+    fs::write(
+        workspace.root().join("clippy.toml"),
+        "cognitive-complexity-threshold = 12\n",
+    )
+    .expect("Clippy configuration");
 
     let output = command(&workspace)
         .args(["--clippy", "--format", "json"])
@@ -628,12 +682,17 @@ fn axiom_profile_enforces_cognitive_complexity() {
         .expect("run Axiom cognitive complexity lint");
     assert_eq!(output.status.code(), Some(1));
     let document: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let diagnostic = document["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .find(|item| item["rule_id"] == "clippy::cognitive_complexity")
+        .expect("cognitive complexity diagnostic");
     assert!(
-        document["diagnostics"]
-            .as_array()
-            .expect("diagnostics")
-            .iter()
-            .any(|item| item["rule_id"] == "clippy::cognitive_complexity")
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("(13/12)")),
+        "unexpected diagnostic: {diagnostic}"
     );
 }
 

@@ -413,6 +413,29 @@ impl<'a> AuditedFragments<'a> {
     }
 }
 
+struct FindingCollectionContext<'data, 'context, CandidateHasher, ExcludedHasher> {
+    production_fragments: &'data [Fragment],
+    test_fragments: &'data [Fragment],
+    audited_fragments: &'context AuditedFragments<'data>,
+    production_targets: &'context FxHashSet<&'data str>,
+    candidate_crates: &'context HashSet<String, CandidateHasher>,
+    excluded_crates: &'context HashSet<String, ExcludedHasher>,
+    production_definitions: &'context FxHashSet<DefinitionIdentity<'data>>,
+    production_reexport_targets: &'context FxHashMap<DefinitionId, Vec<DefinitionId>>,
+    test_reexport_targets: &'context FxHashMap<DefinitionId, Vec<DefinitionId>>,
+    production: &'context FxHashSet<DefinitionId>,
+    tests: &'context FxHashSet<DefinitionId>,
+    equivalents: &'context EquivalenceGroups,
+}
+
+struct RestrictedFindingContext<'data, 'context> {
+    production_candidates: &'context FxHashSet<DefinitionIdentity<'data>>,
+    non_production_root_definitions: &'context FxHashSet<DefinitionIdentity<'data>>,
+    required_scopes: &'context FxHashMap<DefinitionId, RequiredScope>,
+    visibility_equivalents: &'context EquivalenceGroups,
+    visibility_finding_kinds: &'context [Option<FindingKind>],
+}
+
 pub fn analyze<'a, CandidateHasher, ExcludedHasher>(
     production_fragments: &'a [Fragment],
     test_fragments: &'a [Fragment],
@@ -629,49 +652,6 @@ where
         &explicitly_required,
     );
 
-    let mut findings = Vec::new();
-    let mut reported_test_only = FxHashSet::default();
-    for (fragment, definition) in production_fragments
-        .iter()
-        .filter(|fragment| audited_fragments.contains(fragment))
-        .flat_map(|fragment| {
-            fragment
-                .definitions
-                .iter()
-                .map(move |definition| (fragment, definition))
-        })
-    {
-        let identity = definition_identity(definition);
-        if !production_targets.contains(fragment.compilation_target.as_str())
-            || definition.kind == DefinitionKind::Other
-            || (definition.kind == DefinitionKind::Reexport && !definition.visible_reexport_api)
-            || definition.span.is_none()
-            || !candidate_crates.contains(&definition.crate_name)
-            || excluded_crates.contains(&definition.crate_name)
-            || fragment.product_root_kind == Some(ProductionTargetKind::Binary)
-            || !reported_test_only.insert(identity)
-        {
-            continue;
-        }
-
-        let is_production_live = is_live(
-            definition,
-            &production_reexport_targets,
-            &production,
-            &equivalents,
-        );
-        let is_test_live = is_live(definition, &test_reexport_targets, &tests, &equivalents);
-        if !is_production_live && is_test_live {
-            findings.push(Finding {
-                kind: FindingKind::TestOnly,
-                definition,
-                test_only: true,
-                test_compiled_only: false,
-            });
-        }
-    }
-
-    let mut reported = FxHashSet::default();
     let production_definitions: FxHashSet<_> = production_fragments
         .iter()
         .flat_map(|fragment| &fragment.definitions)
@@ -695,119 +675,43 @@ where
         .flat_map(|fragment| &fragment.definitions)
         .map(definition_identity)
         .collect();
-    for (fragment, definition) in production_fragments
-        .iter()
-        .chain(test_fragments)
-        .filter(|fragment| audited_fragments.contains(fragment))
-        .flat_map(|fragment| {
-            fragment
-                .definitions
-                .iter()
-                .map(move |definition| (fragment, definition))
-        })
-    {
-        let identity = definition_identity(definition);
-        if !production_targets.contains(fragment.compilation_target.as_str())
-            || !definition.public_api
-            || definition.dead_code_allowed
-            || (production_definitions.contains(&identity)
-                && !production_candidates.contains(&identity))
-            || !candidate_crates.contains(&definition.crate_name)
-            || excluded_crates.contains(&definition.crate_name)
-            || fragment.product_root_kind == Some(ProductionTargetKind::Binary)
-        {
-            continue;
-        }
 
-        if required_public_visibility.contains(&definition.id) {
-            continue;
-        }
-
-        if !reported.insert(identity) {
-            continue;
-        }
-
-        let test_compiled_only = !production_definitions.contains(&identity);
-        let is_production_live = is_live(
-            definition,
-            &production_reexport_targets,
-            &production,
-            &equivalents,
-        );
-        let is_test_live = is_live(definition, &test_reexport_targets, &tests, &equivalents);
-        if !is_production_live && !is_test_live {
-            findings.push(Finding {
-                kind: FindingKind::DeadPublic,
-                definition,
-                test_only: false,
-                test_compiled_only,
-            });
-            continue;
-        }
-
-        if definition.kind == DefinitionKind::EnumVariant {
-            continue;
-        }
-
-        findings.push(Finding {
-            kind: FindingKind::UnnecessaryPublic,
-            definition,
-            test_only: !is_production_live && is_test_live,
-            test_compiled_only,
-        });
-    }
-
-    for (fragment, definition) in production_fragments
-        .iter()
-        .chain(test_fragments)
-        .filter(|fragment| audited_fragments.contains(fragment))
-        .flat_map(|fragment| {
-            fragment
-                .definitions
-                .iter()
-                .map(move |definition| (fragment, definition))
-        })
-    {
-        let identity = definition_identity(definition);
-        if !production_targets.contains(fragment.compilation_target.as_str())
-            || !definition.restricted_visible_api
-            || definition.dead_code_allowed
-            || (production_definitions.contains(&identity)
-                && !production_restricted_visible_candidates.contains(&identity))
-            || !candidate_crates.contains(&definition.crate_name)
-            || excluded_crates.contains(&definition.crate_name)
-            || fragment.product_root_kind == Some(ProductionTargetKind::Binary)
-            || (!production_definitions.contains(&identity)
-                && non_production_root_definitions.contains(&identity))
-            || reported.contains(&identity)
-        {
-            continue;
-        }
-
-        let Some(kind) = restricted_visibility_finding_kind(
-            definition,
-            &required_scopes,
-            &visibility_equivalents,
-            &visibility_finding_kinds,
-        ) else {
-            continue;
-        };
-        reported.insert(identity);
-        let test_compiled_only = !production_definitions.contains(&identity);
-        let is_production_live = is_live(
-            definition,
-            &production_reexport_targets,
-            &production,
-            &equivalents,
-        );
-        let is_test_live = is_live(definition, &test_reexport_targets, &tests, &equivalents);
-        findings.push(Finding {
-            kind,
-            definition,
-            test_only: !is_production_live && is_test_live,
-            test_compiled_only,
-        });
-    }
+    let collection_context = FindingCollectionContext {
+        production_fragments,
+        test_fragments,
+        audited_fragments: &audited_fragments,
+        production_targets: &production_targets,
+        candidate_crates,
+        excluded_crates,
+        production_definitions: &production_definitions,
+        production_reexport_targets: &production_reexport_targets,
+        test_reexport_targets: &test_reexport_targets,
+        production: &production,
+        tests: &tests,
+        equivalents: &equivalents,
+    };
+    let restricted_context = RestrictedFindingContext {
+        production_candidates: &production_restricted_visible_candidates,
+        non_production_root_definitions: &non_production_root_definitions,
+        required_scopes: &required_scopes,
+        visibility_equivalents: &visibility_equivalents,
+        visibility_finding_kinds: &visibility_finding_kinds,
+    };
+    let mut findings = collect_test_only_findings(&collection_context);
+    let mut reported = FxHashSet::default();
+    collect_public_findings(
+        &mut findings,
+        &mut reported,
+        &collection_context,
+        &production_candidates,
+        &required_public_visibility,
+    );
+    collect_restricted_visibility_findings(
+        &mut findings,
+        &mut reported,
+        &collection_context,
+        &restricted_context,
+    );
 
     if preserve_uniform_field_visibility {
         preserve_uniform_field_visibility_findings(
@@ -833,6 +737,204 @@ where
         )
     });
     findings
+}
+
+fn collect_test_only_findings<'a, CandidateHasher, ExcludedHasher>(
+    context: &FindingCollectionContext<'a, '_, CandidateHasher, ExcludedHasher>,
+) -> Vec<Finding<'a>>
+where
+    CandidateHasher: BuildHasher,
+    ExcludedHasher: BuildHasher,
+{
+    let mut findings = Vec::new();
+    let mut reported = FxHashSet::default();
+    for (fragment, definition) in context
+        .production_fragments
+        .iter()
+        .filter(|fragment| context.audited_fragments.contains(fragment))
+        .flat_map(fragment_definitions)
+    {
+        let identity = definition_identity(definition);
+        if !context
+            .production_targets
+            .contains(fragment.compilation_target.as_str())
+            || definition.kind == DefinitionKind::Other
+            || (definition.kind == DefinitionKind::Reexport && !definition.visible_reexport_api)
+            || definition.span.is_none()
+            || !context.candidate_crates.contains(&definition.crate_name)
+            || context.excluded_crates.contains(&definition.crate_name)
+            || fragment.product_root_kind == Some(ProductionTargetKind::Binary)
+            || !reported.insert(identity)
+        {
+            continue;
+        }
+
+        let is_production_live = is_live(
+            definition,
+            context.production_reexport_targets,
+            context.production,
+            context.equivalents,
+        );
+        let is_test_live = is_live(
+            definition,
+            context.test_reexport_targets,
+            context.tests,
+            context.equivalents,
+        );
+        if !is_production_live && is_test_live {
+            findings.push(Finding {
+                kind: FindingKind::TestOnly,
+                definition,
+                test_only: true,
+                test_compiled_only: false,
+            });
+        }
+    }
+    findings
+}
+
+fn collect_public_findings<'a, CandidateHasher, ExcludedHasher>(
+    findings: &mut Vec<Finding<'a>>,
+    reported: &mut FxHashSet<DefinitionIdentity<'a>>,
+    context: &FindingCollectionContext<'a, '_, CandidateHasher, ExcludedHasher>,
+    production_candidates: &FxHashSet<DefinitionIdentity<'a>>,
+    required_public_visibility: &FxHashSet<DefinitionId>,
+) where
+    CandidateHasher: BuildHasher,
+    ExcludedHasher: BuildHasher,
+{
+    for (fragment, definition) in context
+        .production_fragments
+        .iter()
+        .chain(context.test_fragments)
+        .filter(|fragment| context.audited_fragments.contains(fragment))
+        .flat_map(fragment_definitions)
+    {
+        let identity = definition_identity(definition);
+        if !context
+            .production_targets
+            .contains(fragment.compilation_target.as_str())
+            || !definition.public_api
+            || definition.dead_code_allowed
+            || (context.production_definitions.contains(&identity)
+                && !production_candidates.contains(&identity))
+            || !context.candidate_crates.contains(&definition.crate_name)
+            || context.excluded_crates.contains(&definition.crate_name)
+            || fragment.product_root_kind == Some(ProductionTargetKind::Binary)
+            || required_public_visibility.contains(&definition.id)
+            || !reported.insert(identity)
+        {
+            continue;
+        }
+
+        let test_compiled_only = !context.production_definitions.contains(&identity);
+        let is_production_live = is_live(
+            definition,
+            context.production_reexport_targets,
+            context.production,
+            context.equivalents,
+        );
+        let is_test_live = is_live(
+            definition,
+            context.test_reexport_targets,
+            context.tests,
+            context.equivalents,
+        );
+        if !is_production_live && !is_test_live {
+            findings.push(Finding {
+                kind: FindingKind::DeadPublic,
+                definition,
+                test_only: false,
+                test_compiled_only,
+            });
+            continue;
+        }
+
+        if definition.kind == DefinitionKind::EnumVariant {
+            continue;
+        }
+
+        findings.push(Finding {
+            kind: FindingKind::UnnecessaryPublic,
+            definition,
+            test_only: !is_production_live && is_test_live,
+            test_compiled_only,
+        });
+    }
+}
+
+fn collect_restricted_visibility_findings<'a, CandidateHasher, ExcludedHasher>(
+    findings: &mut Vec<Finding<'a>>,
+    reported: &mut FxHashSet<DefinitionIdentity<'a>>,
+    context: &FindingCollectionContext<'a, '_, CandidateHasher, ExcludedHasher>,
+    restricted: &RestrictedFindingContext<'a, '_>,
+) where
+    CandidateHasher: BuildHasher,
+    ExcludedHasher: BuildHasher,
+{
+    for (fragment, definition) in context
+        .production_fragments
+        .iter()
+        .chain(context.test_fragments)
+        .filter(|fragment| context.audited_fragments.contains(fragment))
+        .flat_map(fragment_definitions)
+    {
+        let identity = definition_identity(definition);
+        if !context
+            .production_targets
+            .contains(fragment.compilation_target.as_str())
+            || !definition.restricted_visible_api
+            || definition.dead_code_allowed
+            || (context.production_definitions.contains(&identity)
+                && !restricted.production_candidates.contains(&identity))
+            || !context.candidate_crates.contains(&definition.crate_name)
+            || context.excluded_crates.contains(&definition.crate_name)
+            || fragment.product_root_kind == Some(ProductionTargetKind::Binary)
+            || (!context.production_definitions.contains(&identity)
+                && restricted
+                    .non_production_root_definitions
+                    .contains(&identity))
+            || reported.contains(&identity)
+        {
+            continue;
+        }
+
+        let Some(kind) = restricted_visibility_finding_kind(
+            definition,
+            restricted.required_scopes,
+            restricted.visibility_equivalents,
+            restricted.visibility_finding_kinds,
+        ) else {
+            continue;
+        };
+        reported.insert(identity);
+        let test_compiled_only = !context.production_definitions.contains(&identity);
+        let is_production_live = is_live(
+            definition,
+            context.production_reexport_targets,
+            context.production,
+            context.equivalents,
+        );
+        let is_test_live = is_live(
+            definition,
+            context.test_reexport_targets,
+            context.tests,
+            context.equivalents,
+        );
+        findings.push(Finding {
+            kind,
+            definition,
+            test_only: !is_production_live && is_test_live,
+            test_compiled_only,
+        });
+    }
+}
+
+fn fragment_definitions(fragment: &Fragment) -> impl Iterator<Item = (&Fragment, &Definition)> {
+    fragment
+        .definitions
+        .iter()
+        .map(move |definition| (fragment, definition))
 }
 
 fn field_group_identity(definition: &Definition) -> Option<&Span> {

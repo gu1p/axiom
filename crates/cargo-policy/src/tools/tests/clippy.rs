@@ -1,140 +1,10 @@
-use std::collections::BTreeMap;
-use std::process::Command;
-
 use policy_core::{
     ClippyConfig, ClippyFeatureSelection, ClippyTargetCoverage, ClippyWarningPolicy, Level,
 };
 
 use super::{command, profile};
 
-struct ClippyInventory {
-    defaults: BTreeMap<String, Level>,
-    groups: BTreeMap<String, Vec<String>>,
-}
-
-fn clippy_inventory() -> ClippyInventory {
-    let output = Command::new("clippy-driver")
-        .args(["-W", "help"])
-        .output()
-        .expect("run the pinned Clippy driver");
-    assert!(output.status.success(), "clippy-driver -W help succeeds");
-    let help = String::from_utf8(output.stdout).expect("Clippy help is UTF-8");
-    let loaded = help
-        .split_once("Lint checks loaded by this crate:")
-        .expect("Clippy lint table")
-        .1;
-    let (checks, groups) = loaded
-        .split_once("Lint groups loaded by this crate:")
-        .expect("Clippy group table");
-    ClippyInventory {
-        defaults: parse_lint_levels(checks),
-        groups: parse_lint_groups(groups),
-    }
-}
-
-fn parse_lint_levels(checks: &str) -> BTreeMap<String, Level> {
-    checks
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let name = fields.next()?.strip_prefix("clippy::")?;
-            let level = parse_level(fields.next().expect("Clippy lint default level"));
-            Some((format!("clippy::{name}"), level))
-        })
-        .collect()
-}
-
-fn parse_lint_groups(groups: &str) -> BTreeMap<String, Vec<String>> {
-    groups
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let name = fields.next()?.strip_prefix("clippy::")?;
-            let members = fields
-                .map(|member| member.trim_end_matches(',').to_owned())
-                .collect();
-            Some((format!("clippy::{name}"), members))
-        })
-        .collect()
-}
-
-fn parse_level(level: &str) -> Level {
-    match level {
-        "allow" => Level::Allow,
-        "warn" => Level::Warn,
-        "deny" => Level::Deny,
-        other => panic!("unexpected Clippy lint level: {other}"),
-    }
-}
-
-fn axiom_profile_levels(inventory: &ClippyInventory) -> BTreeMap<String, Level> {
-    let mut levels = inventory.defaults.clone();
-    let arguments = profile::compiler_arguments(&ClippyConfig::default());
-    let (pairs, remainder) = arguments.as_chunks::<2>();
-    assert!(
-        remainder.is_empty(),
-        "compiler arguments are level/lint pairs"
-    );
-    for pair in pairs {
-        apply_compiler_argument(&mut levels, inventory, &pair[0], &pair[1]);
-    }
-    levels
-        .into_iter()
-        .map(|(name, level)| (name.replace('-', "_"), level))
-        .collect()
-}
-
-fn apply_compiler_argument(
-    levels: &mut BTreeMap<String, Level>,
-    inventory: &ClippyInventory,
-    flag: &str,
-    lint: &str,
-) {
-    if lint == "warnings" && flag == "-D" {
-        for level in levels.values_mut() {
-            if *level == Level::Warn {
-                *level = Level::Deny;
-            }
-        }
-        return;
-    }
-    let Some(level) = level_from_flag(flag) else {
-        return;
-    };
-    if let Some(members) = inventory.groups.get(lint) {
-        for member in members {
-            levels.insert(member.clone(), level);
-        }
-    } else if lint.starts_with("clippy::") {
-        levels.insert(lint.to_owned(), level);
-    }
-}
-
-fn level_from_flag(flag: &str) -> Option<Level> {
-    match flag {
-        "-A" => Some(Level::Allow),
-        "-W" | "--force-warn" => Some(Level::Warn),
-        "-D" => Some(Level::Deny),
-        _ => None,
-    }
-}
-
-fn catalog_levels() -> BTreeMap<String, Level> {
-    let catalog: toml::Value = toml::from_str(include_str!("../../clippy-lints.toml"))
-        .expect("built-in Clippy lint catalog is valid TOML");
-    catalog["tools"]["clippy"]["lints"]
-        .as_table()
-        .expect("Clippy lint table")
-        .iter()
-        .map(|(name, value)| {
-            let level = value.as_str().expect("Clippy lint level");
-            (name.clone(), parse_level(level))
-        })
-        .collect()
-}
-
-#[test]
-fn command_maps_clippy_configuration_to_cargo_arguments() {
+fn configured_command_arguments() -> Vec<String> {
     let input = policy_core::AnalysisInput {
         workspace_root: "/workspace".into(),
         sources: Vec::new(),
@@ -152,11 +22,17 @@ fn command_maps_clippy_configuration_to_cargo_arguments() {
         false,
         std::path::Path::new("/temporary/cargo-target"),
     );
-    let arguments: Vec<_> = command
+    command
         .get_args()
         .map(|argument| argument.to_string_lossy().into_owned())
-        .collect();
+        .collect()
+}
 
+fn contains_pair(arguments: &[String], flag: &str, value: &str) -> bool {
+    arguments.windows(2).any(|pair| pair == [flag, value])
+}
+
+fn assert_command_shape(arguments: &[String]) {
     assert!(arguments.starts_with(&[
         "clippy".to_owned(),
         "--manifest-path".to_owned(),
@@ -172,23 +48,35 @@ fn command_maps_clippy_configuration_to_cargo_arguments() {
     assert!(arguments.contains(&"--no-deps".to_owned()));
     assert!(arguments.contains(&"--keep-going".to_owned()));
     assert!(!arguments.contains(&"--all-targets".to_owned()));
+}
+
+fn assert_feature_selection(arguments: &[String]) {
     assert!(!arguments.contains(&"--all-features".to_owned()));
-    assert!(
-        arguments
-            .windows(2)
-            .any(|pair| pair == ["--features", "server,postgres"])
-    );
+    assert!(contains_pair(arguments, "--features", "server,postgres"));
     assert!(arguments.contains(&"--no-default-features".to_owned()));
-    assert!(!arguments.windows(2).any(|pair| pair == ["-D", "warnings"]));
-    assert!(
-        arguments
-            .windows(2)
-            .any(|pair| pair == ["-D", "unsafe-code"])
-    );
-    assert!(arguments.contains(&"clippy::pedantic".to_owned()));
-    assert!(arguments.contains(&"clippy::cognitive-complexity".to_owned()));
+}
+
+fn assert_lint_profile(arguments: &[String]) {
+    assert!(!contains_pair(arguments, "-D", "warnings"));
+    assert!(contains_pair(arguments, "-D", "unsafe-code"));
+    for lint in [
+        "clippy::all",
+        "clippy::cargo",
+        "clippy::pedantic",
+        "clippy::cognitive-complexity",
+    ] {
+        assert!(contains_pair(arguments, "-W", lint));
+    }
     assert!(arguments.contains(&"clippy::unwrap-used".to_owned()));
-    assert!(arguments.contains(&"clippy::cast-lossless".to_owned()));
+    assert!(contains_pair(arguments, "-A", "clippy::cast-lossless"));
+}
+
+#[test]
+fn command_maps_clippy_configuration_to_cargo_arguments() {
+    let arguments = configured_command_arguments();
+    assert_command_shape(&arguments);
+    assert_feature_selection(&arguments);
+    assert_lint_profile(&arguments);
 }
 
 #[test]
@@ -232,14 +120,4 @@ fn individual_lint_overrides_are_applied_last_to_the_correct_backend() {
         "rustdoc::broken_intra_doc_links".to_owned(),
     ]));
     assert!(!rustdoc.contains(&"clippy::unwrap_used".to_owned()));
-}
-
-#[test]
-fn complete_lint_catalog_matches_the_pinned_clippy_and_axiom_profile() {
-    let inventory = clippy_inventory();
-    let catalog = catalog_levels();
-
-    assert_eq!(catalog.len(), 822);
-    assert_eq!(catalog, axiom_profile_levels(&inventory));
-    assert_eq!(catalog["clippy::cognitive_complexity"], Level::Deny);
 }

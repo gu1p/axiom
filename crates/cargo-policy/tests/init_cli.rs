@@ -1,58 +1,29 @@
 mod support;
 
-use std::collections::BTreeMap;
-use std::path::Path;
 use std::process::Command;
 
 use support::TestWorkspace;
 
-const LINT_VALUES_COMMENT: &str =
-    "# Possible values: \"deny\" (error), \"warn\" (warning), \"allow\" (disabled).";
-
-fn clippy_lints(config: &str) -> BTreeMap<String, String> {
-    let policy: toml::Value = toml::from_str(config).expect("valid generated policy");
-    policy["tools"]["clippy"]["lints"]
-        .as_table()
-        .expect("generated Clippy lint catalog")
-        .iter()
-        .map(|(name, level)| {
-            (
-                name.clone(),
-                level.as_str().expect("Clippy lint level").to_owned(),
-            )
-        })
-        .collect()
+fn assert_policy_contains(config: &str, expected: &str) {
+    assert!(
+        config.contains(expected),
+        "generated policy should contain {expected:?}"
+    );
 }
 
-fn assert_documented_clippy_catalog(config: &str) {
-    let lints = clippy_lints(config);
-    let mut previous = "";
-    let mut documented = 0;
-    for line in config.lines() {
-        if line.starts_with("\"clippy::") {
-            assert_eq!(
-                previous, LINT_VALUES_COMMENT,
-                "missing comment above {line}"
-            );
-            documented += 1;
-        }
-        previous = line;
-    }
+fn assert_curated_clippy_profile(config: &str) {
+    let policy: toml::Value = toml::from_str(config).expect("valid policy");
+    let clippy = policy["tools"]["clippy"]
+        .as_table()
+        .expect("Clippy configuration");
     assert_eq!(
-        documented,
-        lints.len(),
-        "every catalog entry has a values comment"
-    );
-    assert_eq!(lints.len(), 822, "catalog covers the pinned Clippy");
-    assert_eq!(
-        lints["clippy::cognitive_complexity"], "deny",
-        "cognitive complexity is enabled"
+        clippy["profile"].as_str(),
+        Some("axiom"),
+        "generated policy should select the curated Axiom profile"
     );
     assert!(
-        lints
-            .values()
-            .all(|level| level == "deny" || level == "allow"),
-        "every lint is explicitly enabled or disabled"
+        !clippy.contains_key("lints"),
+        "generated policy should not contain a per-lint catalog"
     );
 }
 
@@ -65,51 +36,111 @@ fn init_command(workspace: &TestWorkspace) -> Command {
     command
 }
 
-#[test]
-fn init_creates_the_default_policy_and_refuses_to_overwrite_it() {
+fn initialized_library_workspace() -> (TestWorkspace, String) {
     let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 99, 999);
     std::fs::remove_file(workspace.root().join("policy.toml")).expect("remove fixture policy");
 
     let first = init_command(&workspace)
         .output()
         .expect("initialize policy");
-    assert!(first.status.success());
+    assert!(
+        first.status.success(),
+        "initialization should succeed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
     let config =
         std::fs::read_to_string(workspace.root().join("policy.toml")).expect("initialized policy");
-    assert!(config.contains("limit = 50"));
-    assert!(config.contains("limit = 200"));
-    assert!(config.contains(
-        "[rules.\"size/directory-max-files\"]\nlevel = \"deny\"\nlimit = 5\nscope = \"production\""
-    ));
-    assert!(config.contains(
-        "[rules.\"size/directory-max-lines\"]\nlevel = \"deny\"\nlimit = 1000\nscope = \"production\""
-    ));
-    assert!(config.contains("testing/separate-test-files"));
-    assert!(config.contains("scope = \"production\""));
-    assert!(config.contains("test = ["));
-    assert!(config.contains("[tools.clippy]"));
-    assert!(config.contains("profile = \"axiom\""));
-    assert!(config.contains("check-docs = true"));
-    assert!(config.contains("warnings = \"deny\""));
-    assert_documented_clippy_catalog(&config);
-    let repository_policy =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy.toml"))
-            .expect("repository policy");
-    assert_documented_clippy_catalog(&repository_policy);
-    assert_eq!(clippy_lints(&config), clippy_lints(&repository_policy));
-    assert!(config.contains("[[semantic.production]]"));
-    assert!(config.contains("# [rules.\"dead-code/public\"]"));
-    assert!(config.contains("# [rules.\"visibility/unnecessary-public\"]\n# level = \"deny\""));
 
-    let second = init_command(&workspace)
+    (workspace, config)
+}
+
+fn assert_default_size_rules(config: &str) {
+    assert_policy_contains(config, "limit = 50");
+    assert_policy_contains(config, "limit = 200");
+    assert_policy_contains(
+        config,
+        "[rules.\"size/directory-max-files\"]\nlevel = \"deny\"\nlimit = 5\nscope = \"production\"",
+    );
+    assert_policy_contains(
+        config,
+        "[rules.\"size/directory-max-lines\"]\nlevel = \"deny\"\nlimit = 1000\nscope = \"production\"",
+    );
+}
+
+fn assert_default_testing_rules(config: &str) {
+    assert_policy_contains(config, "testing/separate-test-files");
+    assert_policy_contains(config, "scope = \"production\"");
+    assert_policy_contains(config, "test = [");
+}
+
+fn assert_default_clippy_tool(config: &str) {
+    assert_policy_contains(config, "[tools.clippy]");
+    assert_policy_contains(config, "profile = \"axiom\"");
+    assert_policy_contains(config, "check-docs = true");
+    assert_policy_contains(config, "warnings = \"deny\"");
+    assert_curated_clippy_profile(config);
+}
+
+fn assert_repository_clippy_profile() {
+    let repository_policy = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy.toml"),
+    )
+    .expect("repository policy");
+    assert_curated_clippy_profile(&repository_policy);
+    let clippy_config: toml::Value = toml::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../clippy.toml"),
+        )
+        .expect("repository Clippy configuration"),
+    )
+    .expect("valid repository Clippy configuration");
+    assert_eq!(
+        clippy_config["cognitive-complexity-threshold"].as_integer(),
+        Some(12),
+        "repository Clippy configuration should cap cognitive complexity at 12"
+    );
+}
+
+fn assert_default_semantic_rules(config: &str) {
+    assert_policy_contains(config, "[[semantic.production]]");
+    assert_policy_contains(config, "# [rules.\"dead-code/public\"]");
+    assert_policy_contains(
+        config,
+        "# [rules.\"visibility/unnecessary-public\"]\n# level = \"deny\"",
+    );
+}
+
+fn assert_existing_policy_is_preserved(workspace: &TestWorkspace, expected: &str) {
+    let second = init_command(workspace)
         .output()
         .expect("repeat initialization");
-    assert_eq!(second.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&second.stderr).contains("could not create"));
+    assert_eq!(
+        second.status.code(),
+        Some(2),
+        "repeated initialization should fail without overwriting"
+    );
+    assert!(
+        String::from_utf8_lossy(&second.stderr).contains("could not create"),
+        "repeated initialization should explain the existing policy: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
     assert_eq!(
         std::fs::read_to_string(workspace.root().join("policy.toml")).expect("preserved policy"),
-        config
+        expected,
+        "repeated initialization should preserve the existing policy"
     );
+}
+
+#[test]
+fn init_creates_the_default_policy_and_refuses_to_overwrite_it() {
+    let (workspace, config) = initialized_library_workspace();
+
+    assert_default_size_rules(&config);
+    assert_default_testing_rules(&config);
+    assert_default_clippy_tool(&config);
+    assert_repository_clippy_profile();
+    assert_default_semantic_rules(&config);
+    assert_existing_policy_is_preserved(&workspace, &config);
 }
 
 #[test]

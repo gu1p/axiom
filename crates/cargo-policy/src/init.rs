@@ -21,8 +21,6 @@ features = "default"
 warnings = "deny"
 "#;
 
-const CLIPPY_LINTS: &str = include_str!("clippy-lints.toml");
-
 const BASE_RULES: &str = r#"
 
 [rules."size/function-max-lines"]
@@ -115,7 +113,6 @@ pub fn run(options: &InitOptions) -> u8 {
     };
     if let Err(error) = file
         .write_all(BASE_CONFIG.as_bytes())
-        .and_then(|()| file.write_all(CLIPPY_LINTS.as_bytes()))
         .and_then(|()| file.write_all(BASE_RULES.as_bytes()))
         .and_then(|()| file.write_all(semantic.as_bytes()))
     {

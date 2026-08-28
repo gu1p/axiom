@@ -1660,6 +1660,109 @@ impl<'tcx> ReferenceVisitor<'tcx> {
         }
     }
 
+    fn record_expression_references(&mut self, expression: &'tcx hir::Expr<'tcx>) {
+        match &expression.kind {
+            hir::ExprKind::Path(hir::QPath::TypeRelative(..)) => {
+                self.record_type_relative_expression(expression);
+            }
+            hir::ExprKind::Struct(..) => self.record_struct_expression(expression),
+            hir::ExprKind::Field(..) => self.record_field_expression(expression),
+            hir::ExprKind::OffsetOf(..) => self.record_offset_of_expression(expression),
+            hir::ExprKind::MethodCall(..) => self.record_method_call_expression(expression),
+            _ => {}
+        }
+    }
+
+    fn record_type_relative_expression(&mut self, expression: &'tcx hir::Expr<'tcx>) {
+        let Some(typeck_results) = self.typeck_results else {
+            return;
+        };
+        let hir::ExprKind::Path(qpath) = &expression.kind else {
+            return;
+        };
+        self.record(typeck_results.qpath_res(qpath, expression.hir_id));
+    }
+
+    fn record_struct_expression(&mut self, expression: &'tcx hir::Expr<'tcx>) {
+        let Some(typeck_results) = self.typeck_results else {
+            return;
+        };
+        let hir::ExprKind::Struct(qpath, fields, tail) = &expression.kind else {
+            return;
+        };
+
+        let resolution = typeck_results.qpath_res(qpath, expression.hir_id);
+        if matches!(qpath, hir::QPath::TypeRelative(..)) {
+            self.record(resolution);
+        }
+        self.record_struct_expression_fields(expression, fields, tail);
+    }
+
+    fn record_struct_expression_fields(
+        &mut self,
+        expression: &'tcx hir::Expr<'tcx>,
+        fields: &[hir::ExprField<'tcx>],
+        tail: &hir::StructTailExpr<'tcx>,
+    ) {
+        let Some(typeck_results) = self.typeck_results else {
+            return;
+        };
+        let Some(adt) = typeck_results.expr_ty(expression).ty_adt_def() else {
+            return;
+        };
+        if adt.is_enum() {
+            return;
+        }
+
+        for field in fields {
+            self.record_non_enum_field(adt, field.hir_id);
+        }
+        if !matches!(tail, hir::StructTailExpr::None) {
+            for field in &adt.non_enum_variant().fields {
+                self.record_def(field.did);
+            }
+        }
+    }
+
+    fn record_field_expression(&mut self, expression: &'tcx hir::Expr<'tcx>) {
+        let Some(typeck_results) = self.typeck_results else {
+            return;
+        };
+        let hir::ExprKind::Field(base, _) = &expression.kind else {
+            return;
+        };
+        if let Some(adt) = typeck_results.expr_ty_adjusted(base).ty_adt_def()
+            && !adt.is_enum()
+        {
+            self.record_non_enum_field(adt, expression.hir_id);
+        }
+    }
+
+    fn record_offset_of_expression(&mut self, expression: &'tcx hir::Expr<'tcx>) {
+        let Some(typeck_results) = self.typeck_results else {
+            return;
+        };
+        let Some(fields) = typeck_results.offset_of_data().get(expression.hir_id) else {
+            return;
+        };
+
+        for (container, variant, field) in fields {
+            if let ty::Adt(adt, _) = container.kind()
+                && !adt.is_enum()
+            {
+                self.record_def(adt.variant(*variant).fields[*field].did);
+            }
+        }
+    }
+
+    fn record_method_call_expression(&mut self, expression: &'tcx hir::Expr<'tcx>) {
+        if let Some(typeck_results) = self.typeck_results
+            && let Some(def_id) = typeck_results.type_dependent_def_id(expression.hir_id)
+        {
+            self.record_def(def_id);
+        }
+    }
+
     fn visit_node(&mut self, node: Node<'tcx>) {
         match node {
             Node::Item(item) => self.visit_item(item),
@@ -1688,55 +1791,7 @@ impl<'tcx> Visitor<'tcx> for ReferenceVisitor<'tcx> {
     }
 
     fn visit_expr(&mut self, expression: &'tcx hir::Expr<'tcx>) {
-        if let Some(typeck_results) = self.typeck_results {
-            match &expression.kind {
-                hir::ExprKind::Path(qpath @ hir::QPath::TypeRelative(..)) => {
-                    self.record(typeck_results.qpath_res(qpath, expression.hir_id));
-                }
-                hir::ExprKind::Struct(qpath, fields, tail) => {
-                    let resolution = typeck_results.qpath_res(qpath, expression.hir_id);
-                    if matches!(qpath, hir::QPath::TypeRelative(..)) {
-                        self.record(resolution);
-                    }
-                    if let Some(adt) = typeck_results.expr_ty(expression).ty_adt_def()
-                        && !adt.is_enum()
-                    {
-                        for field in *fields {
-                            self.record_non_enum_field(adt, field.hir_id);
-                        }
-                        if !matches!(tail, hir::StructTailExpr::None) {
-                            for field in &adt.non_enum_variant().fields {
-                                self.record_def(field.did);
-                            }
-                        }
-                    }
-                }
-                hir::ExprKind::Field(base, _) => {
-                    if let Some(adt) = typeck_results.expr_ty_adjusted(base).ty_adt_def()
-                        && !adt.is_enum()
-                    {
-                        self.record_non_enum_field(adt, expression.hir_id);
-                    }
-                }
-                hir::ExprKind::OffsetOf(..) => {
-                    if let Some(fields) = typeck_results.offset_of_data().get(expression.hir_id) {
-                        for (container, variant, field) in fields {
-                            if let ty::Adt(adt, _) = container.kind()
-                                && !adt.is_enum()
-                            {
-                                self.record_def(adt.variant(*variant).fields[*field].did);
-                            }
-                        }
-                    }
-                }
-                hir::ExprKind::MethodCall(..) => {
-                    if let Some(def_id) = typeck_results.type_dependent_def_id(expression.hir_id) {
-                        self.record_def(def_id);
-                    }
-                }
-                _ => {}
-            }
-        }
+        self.record_expression_references(expression);
         intravisit::walk_expr(self, expression);
     }
 

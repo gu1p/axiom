@@ -153,28 +153,21 @@ self_named_module_files = "allow"
 significant_drop_tightening = "allow"
 ```
 
-The exhaustive representation is the checked-in
-[`clippy-lints.toml`](../crates/cargo-policy/src/clippy-lints.toml) catalog. It contains every
-individual lint reported by the pinned `clippy-driver -W help`; `axiom init` copies that catalog
-into the new workspace's `policy.toml`. Each entry is set to `deny` or `allow` to preserve the
-profile above, and each has an adjacent comment listing every supported value. A test compares the
-catalog with both the pinned Clippy inventory and the effective Axiom profile.
-
 `cognitive_complexity` is the current name of Clippy's former `cyclomatic_complexity` lint;
-current Clippy does not provide two independent metrics. Its limit defaults to `25`. A workspace
-can set a different limit in `clippy.toml` or `.clippy.toml`:
+current Clippy does not provide two independent metrics. Its limit defaults to `25`; this
+repository sets it to `12` in the root `clippy.toml`. A workspace can choose its own limit in
+`clippy.toml` or `.clippy.toml`:
 
 ```toml
-cognitive-complexity-threshold = 30
+cognitive-complexity-threshold = 12
 ```
 
-The tool attribute `#[clippy::cognitive_complexity = "30"]` can override the limit for one item,
-but a workspace-wide configuration is preferable when the intended policy is general.
+An item-level `clippy::cognitive_complexity` attribute can override the limit locally, but a
+workspace-wide configuration is preferable when the intended policy is general.
 
 Use `profile = "workspace"` when a repository intentionally owns a different complete profile in
 its Cargo manifests. This switches off Axiom's selections rather than merging two competing
-profiles. The generated `[tools.clippy.lints]` entries are explicit overrides, so remove that table
-too when the Cargo manifests should be the sole owner.
+profiles.
 
 Per-lint entries under `[tools.clippy.lints]` are applied after this profile and the global
 `warnings` policy. Use the exact lint code printed by Axiom:

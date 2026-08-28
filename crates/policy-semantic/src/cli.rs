@@ -323,10 +323,15 @@ impl TerminalColor {
     }
 }
 
-pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
+fn normalize_command_arguments(mut raw_args: Vec<String>) -> Vec<String> {
     if raw_args.get(1).is_some_and(|argument| argument == "hawk") {
         raw_args.remove(1);
     }
+    raw_args
+}
+
+pub(crate) fn run(raw_args: Vec<String>) -> Result<ExitCode> {
+    let raw_args = normalize_command_arguments(raw_args);
     let matches = match Args::command().try_get_matches_from(&raw_args) {
         Ok(matches) => matches,
         Err(error) => {
@@ -661,126 +666,23 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
         test_fragments.extend(profile_tests);
     }
     let excluded: HashSet<String> = args.excluded_crates.iter().cloned().collect();
-    if args.fix {
-        let profile_graph = profile_graphs
-            .first()
-            .expect("every feature profile has a graph directory");
-        let mut fix_iteration = 0;
-        let mut applied_fix_plans = HashSet::new();
-        loop {
-            let initial_findings = config.apply(
-                &analysis_target,
-                &production_fragments,
-                &test_fragments,
-                &candidate_crates,
-                analyze_with_options(
-                    &production_fragments,
-                    &test_fragments,
-                    &candidate_crates,
-                    &excluded,
-                    config.preserve_uniform_field_visibility(),
-                ),
-            );
-            let fixable_findings: Vec<_> = initial_findings
-                .findings
-                .iter()
-                .filter(|finding| args.only.is_none_or(|only| only.includes(finding.kind)))
-                .filter(|finding| lint_levels.level(finding.kind).is_emitted())
-                // Restricting unreachable public surface to `pub(crate)` can
-                // make rustc's ordinary `dead_code` lint start firing. Such
-                // findings need coordinated removal rather than a
-                // visibility-only fix.
-                .filter(|finding| {
-                    matches!(
-                        finding.kind,
-                        FindingKind::UnnecessaryRestrictedVisibility
-                            | FindingKind::UnnecessaryCrateVisibility
-                    ) || (fix_iteration == 0 && finding.kind == FindingKind::UnnecessaryPublic)
-                })
-                .collect();
-            let production_definitions = definition_index(&production_fragments);
-            let test_definitions = definition_index(&test_fragments);
-            let production_fix_plan = fix_plan_for(
-                fixable_findings
-                    .iter()
-                    .copied()
-                    .filter(|finding| !finding.test_only && !finding.test_compiled_only),
-                &production_definitions,
-            );
-            let test_fix_plan = fix_plan_for(
-                fixable_findings
-                    .iter()
-                    .copied()
-                    .filter(|finding| finding.test_only || finding.test_compiled_only),
-                &test_definitions,
-            );
-            // A grouped `pub use` has one visibility span even when its aliases
-            // are approved by different consumer modes. Project every approved
-            // finding through each graph so fixes never name declarations
-            // absent from that compilation mode.
-            let production_emission_plan =
-                fix_plan_for(fixable_findings.iter().copied(), &production_definitions);
-            let test_emission_plan =
-                fix_plan_for(fixable_findings.iter().copied(), &test_definitions);
-            if production_fix_plan.targets.is_empty() && test_fix_plan.targets.is_empty() {
-                break;
-            }
-            let fix_signature = fix_plan_signature(&production_fix_plan, &test_fix_plan)?;
-            if !applied_fix_plans.insert(fix_signature) {
-                bail!(
-                    "visibility fixes made no progress after {fix_iteration} iteration(s); the same fix plan was produced after re-analysis"
-                );
-            }
-            let test_fixes_applied = if test_fix_plan.targets.is_empty() {
-                false
-            } else {
-                let fix_packages = fix_packages(&metadata, &test_fix_plan)?;
-                let fix_plan_path = graph_dir.join(format!("test-fix-plan-{fix_iteration}"));
-                write_fix_plan(&fix_plan_path, &test_emission_plan)?;
-                cargo.run(
-                    &format!("{run_id}-test-fix-{fix_iteration}"),
-                    &profile_graph.non_production_dir,
-                    CargoInvocation::FixNonProduction {
-                        plan: &fix_plan_path,
-                        packages: &fix_packages,
-                        allow_dirty: fix_iteration > 0,
-                    },
-                    profile_graph.feature_profile,
-                )?;
-                true
-            };
-            let production_fixes_applied = if production_fix_plan.targets.is_empty() {
-                false
-            } else {
-                let fix_packages = fix_packages(&metadata, &production_fix_plan)?;
-                let fix_plan_path = graph_dir.join(format!("production-fix-plan-{fix_iteration}"));
-                write_fix_plan(&fix_plan_path, &production_emission_plan)?;
-                cargo.run(
-                    &format!("{run_id}-production-fix-{fix_iteration}"),
-                    &profile_graph.production_dir,
-                    CargoInvocation::FixProduction {
-                        plan: &fix_plan_path,
-                        packages: &fix_packages,
-                        allow_dirty: fix_iteration > 0 || test_fixes_applied,
-                    },
-                    profile_graph.feature_profile,
-                )?;
-                true
-            };
-            debug_assert!(
-                test_fixes_applied || production_fixes_applied,
-                "a non-empty fix plan applies at least one mode"
-            );
-            fix_iteration += 1;
-            clear_fragments(&profile_graph.production_dir)?;
-            clear_fragments(&profile_graph.non_production_dir)?;
-            (production_fragments, test_fragments) = collect_profile_fragments(
-                &cargo,
-                profile_graph,
-                &format!("post-fix-{fix_iteration}"),
-            )?;
-        }
-    }
+    apply_visibility_fixes(
+        &FixContext {
+            args: &args,
+            lint_levels: &lint_levels,
+            config: &config,
+            analysis_target: &analysis_target,
+            candidate_crates: &candidate_crates,
+            excluded: &excluded,
+            metadata: &metadata,
+            graph_dir: &graph_dir,
+            run_id: &run_id,
+            cargo: &cargo,
+            profile_graphs: &profile_graphs,
+        },
+        &mut production_fragments,
+        &mut test_fragments,
+    )?;
     let findings = config.apply(
         &analysis_target,
         &production_fragments,
@@ -812,6 +714,160 @@ pub(crate) fn run(mut raw_args: Vec<String>) -> Result<ExitCode> {
     )
 }
 
+struct FixContext<'context, 'cargo, 'product> {
+    args: &'context CheckArgs,
+    lint_levels: &'context LintLevels,
+    config: &'context Config,
+    analysis_target: &'context AnalysisTarget,
+    candidate_crates: &'context HashSet<String>,
+    excluded: &'context HashSet<String>,
+    metadata: &'context cargo_metadata::Metadata,
+    graph_dir: &'context Path,
+    run_id: &'context str,
+    cargo: &'context InstrumentedCargo<'cargo>,
+    profile_graphs: &'context [FeatureProfileGraph<'product>],
+}
+
+fn apply_visibility_fixes(
+    context: &FixContext<'_, '_, '_>,
+    production_fragments: &mut Vec<Fragment>,
+    test_fragments: &mut Vec<Fragment>,
+) -> Result<()> {
+    if !context.args.fix {
+        return Ok(());
+    }
+    let profile_graph = context
+        .profile_graphs
+        .first()
+        .expect("every feature profile has a graph directory");
+    let mut fix_iteration = 0;
+    let mut applied_fix_plans = HashSet::new();
+    loop {
+        let initial_findings = context.config.apply(
+            context.analysis_target,
+            production_fragments,
+            test_fragments,
+            context.candidate_crates,
+            analyze_with_options(
+                production_fragments,
+                test_fragments,
+                context.candidate_crates,
+                context.excluded,
+                context.config.preserve_uniform_field_visibility(),
+            ),
+        );
+        let fixable_findings: Vec<_> = initial_findings
+            .findings
+            .iter()
+            .filter(|finding| {
+                context
+                    .args
+                    .only
+                    .is_none_or(|only| only.includes(finding.kind))
+            })
+            .filter(|finding| context.lint_levels.level(finding.kind).is_emitted())
+            // Restricting unreachable public surface to `pub(crate)` can
+            // make rustc's ordinary `dead_code` lint start firing. Such
+            // findings need coordinated removal rather than a
+            // visibility-only fix.
+            .filter(|finding| {
+                matches!(
+                    finding.kind,
+                    FindingKind::UnnecessaryRestrictedVisibility
+                        | FindingKind::UnnecessaryCrateVisibility
+                ) || (fix_iteration == 0 && finding.kind == FindingKind::UnnecessaryPublic)
+            })
+            .collect();
+        let production_definitions = definition_index(production_fragments);
+        let test_definitions = definition_index(test_fragments);
+        let production_fix_plan = fix_plan_for(
+            fixable_findings
+                .iter()
+                .copied()
+                .filter(|finding| !finding.test_only && !finding.test_compiled_only),
+            &production_definitions,
+        );
+        let test_fix_plan = fix_plan_for(
+            fixable_findings
+                .iter()
+                .copied()
+                .filter(|finding| finding.test_only || finding.test_compiled_only),
+            &test_definitions,
+        );
+        // A grouped `pub use` has one visibility span even when its aliases
+        // are approved by different consumer modes. Project every approved
+        // finding through each graph so fixes never name declarations
+        // absent from that compilation mode.
+        let production_emission_plan =
+            fix_plan_for(fixable_findings.iter().copied(), &production_definitions);
+        let test_emission_plan = fix_plan_for(fixable_findings.iter().copied(), &test_definitions);
+        if production_fix_plan.targets.is_empty() && test_fix_plan.targets.is_empty() {
+            break;
+        }
+        let fix_signature = fix_plan_signature(&production_fix_plan, &test_fix_plan)?;
+        if !applied_fix_plans.insert(fix_signature) {
+            bail!(
+                "visibility fixes made no progress after {fix_iteration} iteration(s); the same fix plan was produced after re-analysis"
+            );
+        }
+        let test_fixes_applied = if test_fix_plan.targets.is_empty() {
+            false
+        } else {
+            let fix_packages = fix_packages(context.metadata, &test_fix_plan)?;
+            let fix_plan_path = context
+                .graph_dir
+                .join(format!("test-fix-plan-{fix_iteration}"));
+            write_fix_plan(&fix_plan_path, &test_emission_plan)?;
+            context.cargo.run(
+                &format!("{}-test-fix-{fix_iteration}", context.run_id),
+                &profile_graph.non_production_dir,
+                CargoInvocation::FixNonProduction {
+                    plan: &fix_plan_path,
+                    packages: &fix_packages,
+                    allow_dirty: fix_iteration > 0,
+                },
+                profile_graph.feature_profile,
+            )?;
+            true
+        };
+        let production_fixes_applied = if production_fix_plan.targets.is_empty() {
+            false
+        } else {
+            let fix_packages = fix_packages(context.metadata, &production_fix_plan)?;
+            let fix_plan_path = context
+                .graph_dir
+                .join(format!("production-fix-plan-{fix_iteration}"));
+            write_fix_plan(&fix_plan_path, &production_emission_plan)?;
+            context.cargo.run(
+                &format!("{}-production-fix-{fix_iteration}", context.run_id),
+                &profile_graph.production_dir,
+                CargoInvocation::FixProduction {
+                    plan: &fix_plan_path,
+                    packages: &fix_packages,
+                    allow_dirty: fix_iteration > 0 || test_fixes_applied,
+                },
+                profile_graph.feature_profile,
+            )?;
+            true
+        };
+        debug_assert!(
+            test_fixes_applied || production_fixes_applied,
+            "a non-empty fix plan applies at least one mode"
+        );
+        fix_iteration += 1;
+        clear_fragments(&profile_graph.production_dir)?;
+        clear_fragments(&profile_graph.non_production_dir)?;
+        let (updated_production_fragments, updated_test_fragments) = collect_profile_fragments(
+            context.cargo,
+            profile_graph,
+            &format!("post-fix-{fix_iteration}"),
+        )?;
+        *production_fragments = updated_production_fragments;
+        *test_fragments = updated_test_fragments;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct ReportContext<'context, 'product> {
     args: &'context CheckArgs,
@@ -821,6 +877,94 @@ struct ReportContext<'context, 'product> {
     workspace_root: &'context Path,
     production_products: &'context [ProductionSelection<'product>],
     stream_private_dead_code: bool,
+}
+
+type DiagnosticCounts<'a> = BTreeMap<&'static str, BTreeMap<&'a str, usize>>;
+
+#[derive(Default)]
+struct EmissionSummary {
+    count: usize,
+    has_denied_diagnostic: bool,
+}
+
+fn render_finding_diagnostics<'a>(
+    context: ReportContext<'_, '_>,
+    findings: &[Finding<'a>],
+    definition_packages: &HashMap<DefinitionId, &'a str>,
+    production_description: &str,
+    renderer: &mut DiagnosticRenderer<'_>,
+    json_diagnostics: &mut Vec<serde_json::Value>,
+    diagnostic_counts: &mut DiagnosticCounts<'a>,
+) -> EmissionSummary {
+    let mut summary = EmissionSummary::default();
+    let emitted_findings = findings
+        .iter()
+        .filter(|finding| {
+            context
+                .args
+                .only
+                .is_none_or(|only| only.includes(finding.kind))
+        })
+        .map(|finding| (finding, context.lint_levels.level(finding.kind)))
+        .filter(|(_, level)| level.is_emitted());
+
+    for (finding, level) in emitted_findings {
+        summary.count += 1;
+        let package = definition_packages.get(&finding.definition.id).copied();
+        if context.args.output_format == OutputFormat::Text {
+            *diagnostic_counts
+                .entry(finding.kind.code())
+                .or_default()
+                .entry(package.unwrap_or(&finding.definition.crate_name))
+                .or_default() += 1;
+        }
+        summary.has_denied_diagnostic |= level == LintLevel::Deny;
+        match context.args.output_format {
+            OutputFormat::Text => renderer
+                .write_diagnostic(finding, production_description, level)
+                .expect("formatting diagnostics into a string cannot fail"),
+            OutputFormat::Json => json_diagnostics.push(json_finding(finding, level, package)),
+        }
+    }
+    summary
+}
+
+fn render_config_diagnostics(
+    context: ReportContext<'_, '_>,
+    diagnostics: &[ConfigDiagnostic<'_>],
+    renderer: &mut DiagnosticRenderer<'_>,
+    json_diagnostics: &mut Vec<serde_json::Value>,
+    diagnostic_counts: &mut DiagnosticCounts<'_>,
+) -> EmissionSummary {
+    let mut summary = EmissionSummary::default();
+    let emitted_diagnostics = diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic, context.lint_levels.level(diagnostic.kind())))
+        .filter(|(_, level)| level.is_emitted());
+
+    for (diagnostic, level) in emitted_diagnostics {
+        summary.count += 1;
+        if context.args.output_format == OutputFormat::Text {
+            *diagnostic_counts
+                .entry(diagnostic.kind().code())
+                .or_default()
+                .entry("configuration")
+                .or_default() += 1;
+        }
+        summary.has_denied_diagnostic |= level == LintLevel::Deny;
+        match context.args.output_format {
+            OutputFormat::Text => renderer
+                .write_config_diagnostic(diagnostic, context.config, level)
+                .expect("formatting diagnostics into a string cannot fail"),
+            OutputFormat::Json => json_diagnostics.push(json_config_diagnostic(
+                diagnostic,
+                context.config,
+                context.workspace_root,
+                level,
+            )),
+        }
+    }
+    summary
 }
 
 fn render_findings(
@@ -841,8 +985,7 @@ fn render_findings(
     } = context;
     let mut renderer = DiagnosticRenderer::new(workspace_root);
     let mut json_diagnostics = Vec::new();
-    let mut diagnostic_count = 0;
-    let mut diagnostic_counts = BTreeMap::<&str, BTreeMap<&str, usize>>::new();
+    let mut diagnostic_counts = DiagnosticCounts::new();
     let emitted_finding_ids: HashSet<_> = findings
         .findings
         .iter()
@@ -852,7 +995,6 @@ fn render_findings(
         .collect();
     let definition_packages =
         definition_packages(production_fragments, test_fragments, &emitted_finding_ids);
-    let mut has_denied_diagnostic = false;
     let production_description = if production_products.len() == 1 {
         let product = production_products[0].product;
         format!("{} `{}`", product.kind().as_str(), product.name())
@@ -864,57 +1006,26 @@ fn render_findings(
     } else {
         "the configured production targets".to_owned()
     };
-    for finding in &findings.findings {
-        if args.only.is_some_and(|only| !only.includes(finding.kind)) {
-            continue;
-        }
-        let level = lint_levels.level(finding.kind);
-        if level.is_emitted() {
-            diagnostic_count += 1;
-            let package = definition_packages.get(&finding.definition.id).copied();
-            if args.output_format == OutputFormat::Text {
-                *diagnostic_counts
-                    .entry(finding.kind.code())
-                    .or_default()
-                    .entry(package.unwrap_or(&finding.definition.crate_name))
-                    .or_default() += 1;
-            }
-            has_denied_diagnostic |= level == LintLevel::Deny;
-            match args.output_format {
-                OutputFormat::Text => renderer
-                    .write_diagnostic(finding, &production_description, level)
-                    .expect("formatting diagnostics into a string cannot fail"),
-                OutputFormat::Json => json_diagnostics.push(json_finding(finding, level, package)),
-            }
-        }
-    }
-    for diagnostic in &findings.config_diagnostics {
-        let level = lint_levels.level(diagnostic.kind());
-        if level.is_emitted() {
-            diagnostic_count += 1;
-            if args.output_format == OutputFormat::Text {
-                *diagnostic_counts
-                    .entry(diagnostic.kind().code())
-                    .or_default()
-                    .entry("configuration")
-                    .or_default() += 1;
-            }
-            has_denied_diagnostic |= level == LintLevel::Deny;
-            match args.output_format {
-                OutputFormat::Text => renderer
-                    .write_config_diagnostic(diagnostic, config, level)
-                    .expect("formatting diagnostics into a string cannot fail"),
-                OutputFormat::Json => json_diagnostics.push(json_config_diagnostic(
-                    diagnostic,
-                    config,
-                    workspace_root,
-                    level,
-                )),
-            }
-        }
-    }
+    let mut summary = render_finding_diagnostics(
+        context,
+        &findings.findings,
+        &definition_packages,
+        &production_description,
+        &mut renderer,
+        &mut json_diagnostics,
+        &mut diagnostic_counts,
+    );
+    let config_summary = render_config_diagnostics(
+        context,
+        &findings.config_diagnostics,
+        &mut renderer,
+        &mut json_diagnostics,
+        &mut diagnostic_counts,
+    );
+    summary.count += config_summary.count;
+    summary.has_denied_diagnostic |= config_summary.has_denied_diagnostic;
     if args.output_format == OutputFormat::Json {
-        diagnostic_count += private_dead_diagnostics.len();
+        summary.count += private_dead_diagnostics.len();
         json_diagnostics.extend(
             private_dead_diagnostics
                 .iter()
@@ -930,7 +1041,7 @@ fn render_findings(
         OutputFormat::Text => {
             renderer
                 .write_summary(
-                    diagnostic_count,
+                    summary.count,
                     &diagnostic_counts,
                     &production_summary,
                     &compilation_target,
@@ -945,7 +1056,7 @@ fn render_findings(
             let output = serde_json::json!({
                 "schema_version": 5,
                 "summary": {
-                    "diagnostic_count": diagnostic_count,
+                    "diagnostic_count": summary.count,
                     "target": args.target.as_deref().unwrap_or_else(|| toolchain.host()),
                     "production": production_products
                         .iter()
@@ -986,7 +1097,7 @@ fn render_findings(
             writeln!(stdout).context("write JSON diagnostic output")?;
         }
     }
-    Ok(if has_denied_diagnostic {
+    Ok(if summary.has_denied_diagnostic {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -2386,148 +2497,229 @@ fn workspace_library_crates(
     Ok(packages_by_crate.into_keys().collect())
 }
 
-fn production_workspace_packages(
-    metadata: &cargo_metadata::Metadata,
-    production_products: &[ProductionSelection<'_>],
-    analysis_target: &AnalysisTarget,
-) -> Result<HashSet<String>> {
-    let workspace_packages = metadata.workspace_packages();
-    let packages: HashMap<_, _> = workspace_packages
-        .iter()
-        .map(|package| (&package.id, package.name.as_str()))
-        .collect();
-    let resolve = metadata
-        .resolve
-        .as_ref()
-        .context("Cargo metadata did not contain a resolved dependency graph")?;
-    let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut incoming: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut non_production_incoming: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut normal_dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
-    for node in &resolve.nodes {
-        let Some(&package) = packages.get(&node.id) else {
-            continue;
+type DependencyMap<'a> = HashMap<&'a str, Vec<&'a str>>;
+
+struct WorkspaceDependencyGraph<'a> {
+    packages: Vec<&'a str>,
+    dependencies: DependencyMap<'a>,
+    incoming: DependencyMap<'a>,
+    non_production_incoming: DependencyMap<'a>,
+    normal_dependencies: DependencyMap<'a>,
+}
+
+struct WorkspaceComponents<'a> {
+    groups: Vec<Vec<&'a str>>,
+    by_package: HashMap<&'a str, usize>,
+}
+
+impl<'a> WorkspaceDependencyGraph<'a> {
+    fn from_metadata(
+        metadata: &'a cargo_metadata::Metadata,
+        analysis_target: &AnalysisTarget,
+    ) -> Result<Self> {
+        let workspace_packages = metadata.workspace_packages();
+        let packages: HashMap<_, _> = workspace_packages
+            .iter()
+            .map(|package| (&package.id, package.name.as_str()))
+            .collect();
+        let resolve = metadata
+            .resolve
+            .as_ref()
+            .context("Cargo metadata did not contain a resolved dependency graph")?;
+        let mut graph = Self {
+            packages: packages.values().copied().collect(),
+            dependencies: HashMap::new(),
+            incoming: HashMap::new(),
+            non_production_incoming: HashMap::new(),
+            normal_dependencies: HashMap::new(),
         };
-        for dependency in &node.deps {
-            let Some(&dependency_package) = packages.get(&dependency.pkg) else {
+        for node in &resolve.nodes {
+            let Some(&package) = packages.get(&node.id) else {
                 continue;
             };
-            let mut applicable = dependency.dep_kinds.iter().filter(|kind| {
-                kind.target
-                    .as_ref()
-                    .is_none_or(|platform| analysis_target.matches_platform(platform))
-            });
-            let Some(first_kind) = applicable.next() else {
-                continue;
-            };
-            dependencies
-                .entry(package)
-                .or_default()
-                .push(dependency_package);
-            incoming
-                .entry(dependency_package)
-                .or_default()
-                .push(package);
-            if first_kind.kind == DependencyKind::Normal
-                || applicable.any(|kind| kind.kind == DependencyKind::Normal)
-            {
-                normal_dependencies
+            for dependency in &node.deps {
+                let Some(&dependency_package) = packages.get(&dependency.pkg) else {
+                    continue;
+                };
+                let mut applicable = dependency.dep_kinds.iter().filter(|kind| {
+                    kind.target
+                        .as_ref()
+                        .is_none_or(|platform| analysis_target.matches_platform(platform))
+                });
+                let Some(first_kind) = applicable.next() else {
+                    continue;
+                };
+                graph
+                    .dependencies
                     .entry(package)
                     .or_default()
                     .push(dependency_package);
-            } else {
-                non_production_incoming
+                graph
+                    .incoming
                     .entry(dependency_package)
                     .or_default()
                     .push(package);
+                if first_kind.kind == DependencyKind::Normal
+                    || applicable.any(|kind| kind.kind == DependencyKind::Normal)
+                {
+                    graph
+                        .normal_dependencies
+                        .entry(package)
+                        .or_default()
+                        .push(dependency_package);
+                } else {
+                    graph
+                        .non_production_incoming
+                        .entry(dependency_package)
+                        .or_default()
+                        .push(package);
+                }
             }
         }
+        Ok(graph)
     }
 
-    let mut visited = HashSet::new();
-    let mut ordered = Vec::with_capacity(packages.len());
-    for package in packages.values().copied() {
+    fn dependency_finish_order(&self) -> Vec<&'a str> {
+        let mut visited = HashSet::new();
+        let mut ordered = Vec::with_capacity(self.packages.len());
+        for package in &self.packages {
+            self.append_dependency_finish_order(package, &mut visited, &mut ordered);
+        }
+        ordered
+    }
+
+    fn append_dependency_finish_order(
+        &self,
+        package: &'a str,
+        visited: &mut HashSet<&'a str>,
+        ordered: &mut Vec<&'a str>,
+    ) {
         let mut pending = vec![(package, false)];
         while let Some((package, expanded)) = pending.pop() {
             if expanded {
                 ordered.push(package);
             } else if visited.insert(package) {
                 pending.push((package, true));
-                if let Some(dependencies) = dependencies.get(package) {
+                if let Some(dependencies) = self.dependencies.get(package) {
                     pending.extend(dependencies.iter().map(|dependency| (*dependency, false)));
                 }
             }
         }
     }
 
-    let mut components: Vec<Vec<&str>> = Vec::new();
-    let mut component_by_package = HashMap::new();
-    while let Some(package) = ordered.pop() {
-        if component_by_package.contains_key(package) {
-            continue;
+    fn components(&self) -> WorkspaceComponents<'a> {
+        let mut ordered = self.dependency_finish_order();
+        let mut groups = Vec::new();
+        let mut by_package = HashMap::new();
+        while let Some(package) = ordered.pop() {
+            if by_package.contains_key(package) {
+                continue;
+            }
+            let component_index = groups.len();
+            groups.push(self.collect_component(package, component_index, &mut by_package));
         }
-        let component_index = components.len();
+        WorkspaceComponents { groups, by_package }
+    }
+
+    fn collect_component(
+        &self,
+        package: &'a str,
+        component_index: usize,
+        by_package: &mut HashMap<&'a str, usize>,
+    ) -> Vec<&'a str> {
         let mut component = Vec::new();
         let mut pending = vec![package];
         while let Some(package) = pending.pop() {
-            if component_by_package.contains_key(package) {
+            if by_package.contains_key(package) {
                 continue;
             }
-            component_by_package.insert(package, component_index);
+            by_package.insert(package, component_index);
             component.push(package);
-            if let Some(dependents) = incoming.get(package) {
+            if let Some(dependents) = self.incoming.get(package) {
                 pending.extend(dependents);
             }
         }
-        components.push(component);
+        component
     }
 
-    let mut root_components = vec![true; components.len()];
-    let mut ordered_incoming: Vec<_> = incoming.iter().collect();
-    ordered_incoming.sort_unstable_by_key(|(package, _)| **package);
-    for (&package, dependents) in ordered_incoming {
-        let component = component_by_package[package];
-        if dependents
-            .iter()
-            .any(|dependent| component_by_package[dependent] != component)
-        {
-            root_components[component] = false;
+    fn root_packages(&self) -> Vec<&'a str> {
+        let components = self.components();
+        let root_components = self.root_component_flags(&components);
+        let mut roots = Vec::new();
+        for (index, component) in components.groups.into_iter().enumerate() {
+            if root_components[index] {
+                roots.extend(self.component_entry_packages(
+                    index,
+                    component,
+                    &components.by_package,
+                ));
+            }
         }
+        roots
     }
 
-    let mut pending: Vec<&str> = components
-        .into_iter()
-        .enumerate()
-        .filter(|(index, _)| root_components[*index])
-        .flat_map(|(index, component)| {
-            // A dev-dependency cycle has no package with zero incoming edges.
-            // Start outside its dev/build-only edges so fixtures remain non-production.
-            let roots: Vec<_> = component
+    fn root_component_flags(&self, components: &WorkspaceComponents<'a>) -> Vec<bool> {
+        let mut roots = vec![true; components.groups.len()];
+        let mut ordered_incoming: Vec<_> = self.incoming.iter().collect();
+        ordered_incoming.sort_unstable_by_key(|(package, _)| **package);
+        for (&package, dependents) in ordered_incoming {
+            let component = components.by_package[package];
+            if dependents
                 .iter()
-                .copied()
-                .filter(|package| {
-                    non_production_incoming
-                        .get(package)
-                        .is_none_or(|dependents| {
-                            dependents
-                                .iter()
-                                .all(|dependent| component_by_package[dependent] != index)
-                        })
-                })
-                .collect();
-            if roots.is_empty() { component } else { roots }
-        })
-        .chain(production_products.iter().map(|product| product.package))
-        .collect();
-    let mut production_packages = HashSet::new();
-    while let Some(package) = pending.pop() {
-        if production_packages.insert(package.to_owned())
-            && let Some(dependencies) = normal_dependencies.get(package)
-        {
-            pending.extend(dependencies);
+                .any(|dependent| components.by_package[dependent] != component)
+            {
+                roots[component] = false;
+            }
         }
+        roots
     }
-    Ok(production_packages)
+
+    fn component_entry_packages(
+        &self,
+        component_index: usize,
+        component: Vec<&'a str>,
+        component_by_package: &HashMap<&str, usize>,
+    ) -> Vec<&'a str> {
+        // A dev-dependency cycle has no package with zero incoming edges.
+        // Start outside its dev/build-only edges so fixtures remain non-production.
+        let roots: Vec<_> = component
+            .iter()
+            .copied()
+            .filter(|package| {
+                self.non_production_incoming
+                    .get(package)
+                    .is_none_or(|dependents| {
+                        dependents
+                            .iter()
+                            .all(|dependent| component_by_package[dependent] != component_index)
+                    })
+            })
+            .collect();
+        if roots.is_empty() { component } else { roots }
+    }
+
+    fn normal_dependency_closure(&self, mut pending: Vec<&'a str>) -> HashSet<String> {
+        let mut production_packages = HashSet::new();
+        while let Some(package) = pending.pop() {
+            if production_packages.insert(package.to_owned())
+                && let Some(dependencies) = self.normal_dependencies.get(package)
+            {
+                pending.extend(dependencies);
+            }
+        }
+        production_packages
+    }
+}
+
+fn production_workspace_packages(
+    metadata: &cargo_metadata::Metadata,
+    production_products: &[ProductionSelection<'_>],
+    analysis_target: &AnalysisTarget,
+) -> Result<HashSet<String>> {
+    let graph = WorkspaceDependencyGraph::from_metadata(metadata, analysis_target)?;
+    let mut roots = graph.root_packages();
+    roots.extend(production_products.iter().map(|product| product.package));
+    Ok(graph.normal_dependency_closure(roots))
 }
 
 fn validate_excluded_crates(
@@ -2880,9 +3072,8 @@ mod tests {
         assert!(definition_packages(&production, &tests, &HashSet::new()).is_empty());
     }
 
-    #[test]
-    fn non_production_library_targets_are_classified_by_their_source_paths() {
-        let sources = HashMap::from([
+    fn non_production_sources() -> HashMap<String, WorkspaceLibrarySource> {
+        HashMap::from([
             (
                 "consumer".to_owned(),
                 WorkspaceLibrarySource {
@@ -2897,8 +3088,10 @@ mod tests {
                     path: PathBuf::from("/workspace/api/src/lib.rs"),
                 },
             ),
-        ]);
-        let library_paths = sources.values().map(|source| source.path.clone()).collect();
+        ])
+    }
+
+    fn non_production_fragment(crate_root: &str) -> Fragment {
         let definition = Definition {
             id: test_id("non-production-entry"),
             crate_name: "consumer".into(),
@@ -2915,7 +3108,7 @@ mod tests {
             uniform_field_group: None,
             dead_code_allowed: false,
         };
-        let fragment = |crate_root: &str| Fragment {
+        Fragment {
             protocol_version: crate::protocol::ProtocolVersion,
             package_name: "consumer".into(),
             crate_name: "consumer".into(),
@@ -2931,105 +3124,100 @@ mod tests {
             roots: vec![],
             conservative_roots: vec![],
             required_public_roots: vec![],
-        };
+        }
+    }
 
-        let mut library = fragment("consumer/src/lib.rs");
+    fn classified_non_production_fragment(crate_root: &str, crate_name: &str) -> Fragment {
+        let sources = non_production_sources();
+        let library_paths = sources.values().map(|source| source.path.clone()).collect();
+        let mut fragment = non_production_fragment(crate_root);
+        fragment.crate_name = crate_name.into();
         classify_non_production_target(
-            &mut library,
+            &mut fragment,
             &sources,
             &library_paths,
             Path::new("/workspace"),
         );
-        assert!(!library.is_product_root);
-        assert!(!library.non_production_consumer);
-        assert!(library.roots.is_empty());
+        fragment
+    }
 
-        let mut normalized_library = fragment("consumer/src/../src/./lib.rs");
-        classify_non_production_target(
-            &mut normalized_library,
-            &sources,
-            &library_paths,
-            Path::new("/workspace"),
+    fn assert_target_classification(
+        fragment: &Fragment,
+        is_product_root: bool,
+        non_production_consumer: bool,
+        roots: &[DefinitionId],
+    ) {
+        assert_eq!(
+            (
+                fragment.is_product_root,
+                fragment.non_production_consumer,
+                fragment.roots.as_slice(),
+            ),
+            (is_product_root, non_production_consumer, roots),
         );
-        assert!(!normalized_library.is_product_root);
-        assert!(!normalized_library.non_production_consumer);
+    }
 
-        let mut same_source_example = fragment("consumer/src/lib.rs");
-        same_source_example.crate_name = "example_library".into();
-        classify_non_production_target(
-            &mut same_source_example,
-            &sources,
-            &library_paths,
-            Path::new("/workspace"),
-        );
-        assert!(same_source_example.is_product_root);
-        assert!(same_source_example.non_production_consumer);
-        assert!(same_source_example.roots.is_empty());
+    #[test]
+    fn owning_library_targets_remain_non_production_dependencies() {
+        for crate_root in ["consumer/src/lib.rs", "consumer/src/../src/./lib.rs"] {
+            let fragment = classified_non_production_fragment(crate_root, "consumer");
+            assert_target_classification(&fragment, false, false, &[]);
+        }
+    }
 
-        let mut other_library_example = fragment("api/src/lib.rs");
-        other_library_example.crate_name = "api_example".into();
-        classify_non_production_target(
-            &mut other_library_example,
-            &sources,
-            &library_paths,
-            Path::new("/workspace"),
-        );
-        assert!(other_library_example.is_product_root);
-        assert!(other_library_example.non_production_consumer);
-        assert!(other_library_example.roots.is_empty());
+    #[test]
+    fn library_examples_are_non_production_consumers_without_new_roots() {
+        let same_source =
+            classified_non_production_fragment("consumer/src/lib.rs", "example_library");
+        assert_target_classification(&same_source, true, true, &[]);
 
+        let other_library = classified_non_production_fragment("api/src/lib.rs", "api_example");
+        assert_target_classification(&other_library, true, true, &[]);
+    }
+
+    #[test]
+    fn non_library_targets_root_their_public_definitions() {
+        let expected_roots = [test_id("non-production-entry")];
         for crate_root in [
             "consumer/examples/library.rs",
             "/tmp/rustdoctest/doctest_bundle_2024.rs",
         ] {
-            let mut non_production = fragment(crate_root);
-            classify_non_production_target(
-                &mut non_production,
-                &sources,
-                &library_paths,
-                Path::new("/workspace"),
-            );
-            assert!(non_production.is_product_root);
-            assert!(non_production.non_production_consumer);
-            assert_eq!(non_production.roots, vec![test_id("non-production-entry")]);
+            let fragment = classified_non_production_fragment(crate_root, "consumer");
+            assert_target_classification(&fragment, true, true, &expected_roots);
         }
+    }
 
-        #[cfg(unix)]
-        {
-            // Cargo metadata can preserve a symlink spelling while rustc
-            // reports the canonical path. Both must still identify the
-            // package's actual library target.
-            let directory = tempfile::tempdir().expect("temporary workspace directory");
-            let workspace = directory.path().join("workspace");
-            let source = workspace.join("consumer/src/lib.rs");
-            fs::create_dir_all(source.parent().expect("source has a parent"))
-                .expect("create workspace source directory");
-            fs::write(&source, "").expect("write workspace source");
-            let workspace_alias = directory.path().join("workspace-alias");
-            symlink(&workspace, &workspace_alias).expect("create workspace alias");
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_library_sources_match_canonical_rustc_paths() {
+        // Cargo metadata can preserve a symlink spelling while rustc reports
+        // the canonical path. Both must identify the package's library.
+        let directory = tempfile::tempdir().expect("temporary workspace directory");
+        let workspace = directory.path().join("workspace");
+        let source = workspace.join("consumer/src/lib.rs");
+        fs::create_dir_all(source.parent().expect("source has a parent"))
+            .expect("create workspace source directory");
+        fs::write(&source, "").expect("write workspace source");
+        let workspace_alias = directory.path().join("workspace-alias");
+        symlink(&workspace, &workspace_alias).expect("create workspace alias");
 
-            let sources = HashMap::from([(
-                "consumer".to_owned(),
-                WorkspaceLibrarySource {
-                    crate_name: "consumer".to_owned(),
-                    path: normalize_workspace_source_path(
-                        &workspace_alias.join("consumer/src/lib.rs"),
-                    ),
-                },
-            )]);
-            let library_paths = sources.values().map(|source| source.path.clone()).collect();
-            let mut aliased_library = fragment("consumer/src/lib.rs");
-            classify_non_production_target(
-                &mut aliased_library,
-                &sources,
-                &library_paths,
-                &workspace.canonicalize().expect("canonical workspace"),
-            );
+        let sources = HashMap::from([(
+            "consumer".to_owned(),
+            WorkspaceLibrarySource {
+                crate_name: "consumer".to_owned(),
+                path: normalize_workspace_source_path(&workspace_alias.join("consumer/src/lib.rs")),
+            },
+        )]);
+        let library_paths = sources.values().map(|source| source.path.clone()).collect();
+        let mut fragment = non_production_fragment("consumer/src/lib.rs");
+        classify_non_production_target(
+            &mut fragment,
+            &sources,
+            &library_paths,
+            &workspace.canonicalize().expect("canonical workspace"),
+        );
 
-            assert!(!aliased_library.is_product_root);
-            assert!(!aliased_library.non_production_consumer);
-            assert!(aliased_library.roots.is_empty());
-        }
+        assert_target_classification(&fragment, false, false, &[]);
     }
 
     #[test]

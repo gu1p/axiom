@@ -237,16 +237,12 @@ warnings = "deny"
 The wrapped command uses `cargo clippy --workspace --locked --no-deps --keep-going`, adds
 `--all-targets` by default, and denies warnings. The default `axiom` profile enables strict Rust
 lints, `clippy::all`, `clippy::cargo`, `clippy::pedantic`, selected restriction and nursery lints,
-and the documented low-signal exceptions. Cognitive complexity is limited to Clippy's default of
-25; the former `cyclomatic_complexity` lint is the same check under its old name. Workspaces can
-change the limit with `cognitive-complexity-threshold` in `clippy.toml`. The profile also runs
-`cargo doc` with `rustdoc::all`. See the [complete built-in lint profile](docs/clippy-profile.md).
-
-`axiom init` also writes an alphabetized `[tools.clippy.lints]` catalog containing all 822
-individual lints exposed by the pinned Clippy. Every lint has an explicit `deny` or `allow` value
-matching the Axiom profile, with a comment immediately above it documenting all supported values.
-This makes changing a lint a one-line edit and makes toolchain upgrades expose catalog drift in the
-test suite.
+and the documented low-signal exceptions. The profile explicitly enables `cognitive_complexity`;
+the former `cyclomatic_complexity` lint is the same check under its old name. Clippy defaults its
+threshold to 25, while this repository lowers it to 12 in [`clippy.toml`](clippy.toml). Other
+workspaces can set their own `cognitive-complexity-threshold`. The profile also runs `cargo doc`
+with `rustdoc::all`.
+See the [complete built-in lint profile](docs/clippy-profile.md).
 
 For a workspace whose valid build needs selected features:
 
@@ -264,11 +260,7 @@ the workspace; execution coverage and the `warnings` policy still apply. Set `en
 only when another required system owns Clippy execution. If the component is missing, install it
 with `rustup component add clippy`.
 
-The generated per-lint catalog is still explicit policy. Remove its entries as well when switching
-to `profile = "workspace"` specifically to let Cargo manifests own every lint level.
-
-Edit an existing Clippy entry, or add a compiler or rustdoc entry, without replacing the built-in
-profile:
+Override one compiler, Clippy, or rustdoc lint without replacing the built-in profile:
 
 ```toml
 [tools.clippy.lints]
