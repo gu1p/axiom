@@ -5,8 +5,7 @@ use cargo_metadata::Message;
 use policy_core::{AnalysisError, AnalysisInput, Level};
 
 use super::{command_error, level, tool_diagnostic};
-use crate::process::{configure_group, terminate_group};
-use crate::tools::{ToolDiagnostic, ToolReport};
+use crate::tools::{ToolDiagnostic, ToolReport, configure_group, terminate_group};
 
 pub(super) fn execute(
     tool: &'static str,

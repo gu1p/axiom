@@ -129,6 +129,16 @@ level = "deny"
 limit = 200
 scope = "production"
 
+[rules."size/directory-max-files"]
+level = "deny"
+limit = 5
+scope = "production"
+
+[rules."size/directory-max-lines"]
+level = "deny"
+limit = 1000
+scope = "production"
+
 [rules."testing/separate-test-files"]
 level = "deny"
 
@@ -152,9 +162,12 @@ level = "warn"
 ```
 
 Levels are `allow`, `warn`, and `deny`. Omitted rules are disabled. Every rule also accepts a
-`scope` of `all` (the default), `production`, or `test`. A production-scoped rule ignores findings
-inside dedicated test files, test-attributed functions, and inline `#[cfg(test)]` items. This lets
-production functions keep a strict line budget without imposing the same budget on test setup:
+`scope` of `all` (the default), `production`, or `test`. Finding-oriented rules apply the scope to
+the exact source location, so production scope ignores findings in dedicated test files,
+test-attributed functions, and inline `#[cfg(test)]` items. Directory aggregates apply the scope to
+whole files before counting: a production-classified file contributes in full, while dedicated
+test files do not contribute. This lets production functions and domains keep strict budgets
+without imposing the same limits on test setup:
 
 ```toml
 [rules."size/function-max-lines"]
@@ -178,6 +191,11 @@ object.
 
 Source globs are evaluated against forward-slash workspace-relative paths; normal ignore files,
 `.git`, Cargo's target directory, and directory symlinks are excluded from discovery.
+
+The two directory rules evaluate every directory represented by discovered source files. Each
+directory owns only its direct files; nested directories are discovered and evaluated separately.
+This makes moving a growing implementation into a cohesive subdomain visible as a new independently
+enforced boundary rather than folding it into its parent.
 
 ## Temporary artifacts
 
@@ -333,12 +351,20 @@ musl-only host, disable semantic rules or run Axiom in a glibc environment.
 - Free, associated, trait, extern, nested, and inactive-`cfg` functions are checked.
 - Macro invocations are not expanded.
 
+`size/directory-max-lines` uses code lines rather than physical lines. A physical source line counts
+once when it contains any non-whitespace, non-comment Rust token. Blank lines, ordinary comments,
+and documentation-comment-only lines do not count; a line containing both code and a comment does.
+Multiline non-comment tokens contribute every physical line they occupy. Inactive `cfg` code and
+inline test items inside a production-classified file also contribute, while dedicated test files
+are controlled by the configured rule scope.
+
 JSON output is a deterministic document with `schema_version = 1`, an outcome, diagnostics, and a
 summary. Native diagnostics use `kind = "policy"`; wrapped compiler diagnostics use
 `kind = "tool"` and identify `tool = "clippy"` or `tool = "rustdoc"`. Span byte offsets are
-zero-based; line and Unicode-scalar columns are one-based. Configurable findings include a
-`configuration` object containing the policy file, exact key, effective value, and the meaning of
-each supported level.
+zero-based; line and Unicode-scalar columns are one-based. Numeric policy findings identify their
+`unit` as `files`, `code_lines`, or `physical_lines`. Configurable findings include a `configuration`
+object containing the policy file, exact key, effective value, and the meaning of each supported
+level.
 
 ## Architecture
 

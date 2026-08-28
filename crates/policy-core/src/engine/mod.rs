@@ -1,4 +1,10 @@
-use crate::{AnalysisError, AnalysisInput, CodebaseFacts, Diagnostic, Level, RuleMetadata};
+mod registry;
+
+pub use registry::{RuleFactory, RuleRegistry};
+
+use crate::{
+    AnalysisError, AnalysisInput, CodebaseFacts, Diagnostic, Level, RuleMetadata, RuleScope,
+};
 
 pub trait FactProvider: Send + Sync {
     /// Adds facts derived from the analysis input to the shared fact store.
@@ -17,6 +23,23 @@ pub trait Rule: Send + Sync {
     fn metadata(&self) -> RuleMetadata;
     fn level(&self) -> Level;
     fn evaluate(&self, facts: &CodebaseFacts, diagnostics: &mut Vec<Diagnostic>);
+
+    /// Evaluates this rule for one configured source scope.
+    ///
+    /// Aggregate rules can override this hook to apply the scope before calculating totals.
+    fn evaluate_scoped(
+        &self,
+        facts: &CodebaseFacts,
+        scope: RuleScope,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let mut candidates = Vec::new();
+        self.evaluate(facts, &mut candidates);
+        candidates.retain(|diagnostic| {
+            facts.matches_scope(&diagnostic.path, diagnostic.span.byte_start, scope)
+        });
+        diagnostics.extend(candidates);
+    }
 }
 
 #[derive(Default)]

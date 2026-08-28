@@ -26,6 +26,14 @@ pub enum RuleClass {
     Smell,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricUnit {
+    Files,
+    CodeLines,
+    PhysicalLines,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct RuleMetadata {
     pub id: &'static str,
@@ -58,4 +66,5 @@ pub struct Diagnostic {
     pub span: SourceSpan,
     pub observed: Option<u32>,
     pub limit: Option<u32>,
+    pub unit: Option<MetricUnit>,
 }

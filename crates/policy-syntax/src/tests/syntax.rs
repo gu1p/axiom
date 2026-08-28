@@ -42,6 +42,38 @@ fn includes_docs_but_excludes_unattached_leading_comments() {
 }
 
 #[test]
+fn counts_only_lines_with_non_trivia_tokens() {
+    let text = r"
+// ordinary comment
+/// documentation comment
+fn example() { // mixed code and comment
+    /* multiline
+       comment */
+    let value = 1;
+
+    value
+}
+";
+    let facts = analyze(text).expect("valid Rust");
+    assert_eq!(facts.files[0].line_count, 10);
+    assert_eq!(facts.files[0].code_line_count, 4);
+}
+
+#[test]
+fn counts_every_physical_line_touched_by_a_multiline_code_token() {
+    let text = "const VALUE: &str = r#\"first\nsecond\nthird\"#;\n";
+    let facts = analyze(text).expect("valid Rust");
+    assert_eq!(facts.files[0].code_line_count, 3);
+}
+
+#[test]
+fn includes_inline_test_code_in_the_file_count() {
+    let text = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn works() {}\n}\n";
+    let facts = analyze(text).expect("valid Rust");
+    assert_eq!(facts.files[0].code_line_count, 5);
+}
+
+#[test]
 fn finds_free_trait_impl_extern_and_nested_functions() {
     let text = r#"
 fn free() { fn nested() {} }

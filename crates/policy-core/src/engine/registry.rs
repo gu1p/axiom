@@ -78,11 +78,6 @@ impl Rule for ScopedRule {
     }
 
     fn evaluate(&self, facts: &CodebaseFacts, diagnostics: &mut Vec<Diagnostic>) {
-        let mut candidates = Vec::new();
-        self.inner.evaluate(facts, &mut candidates);
-        candidates.retain(|diagnostic| {
-            facts.matches_scope(&diagnostic.path, diagnostic.span.byte_start, self.scope)
-        });
-        diagnostics.extend(candidates);
+        self.inner.evaluate_scoped(facts, self.scope, diagnostics);
     }
 }

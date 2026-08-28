@@ -21,11 +21,7 @@ pub(super) fn source_location(
     let start = location.byte_start.unwrap_or(0);
     let end = location.byte_end.unwrap_or_else(|| start.saturating_add(1));
     let span = location.byte_start.map_or_else(
-        || {
-            source
-                .lines
-                .span(&source.text, 0, usize::from(!source.text.is_empty()))
-        },
+        || source.lines.span(&source.text, 0, 0),
         |_| location.span(start, end),
     );
     Some((path, span))

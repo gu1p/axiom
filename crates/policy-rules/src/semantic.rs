@@ -81,6 +81,7 @@ impl SemanticRule {
             span: finding.span,
             observed: None,
             limit: None,
+            unit: None,
         }
     }
 }

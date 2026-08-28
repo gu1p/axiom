@@ -1,9 +1,11 @@
-use policy_core::{CodebaseFacts, Diagnostic, Level, Rule, RuleClass, RuleFactory, RuleMetadata};
+use policy_core::{
+    CodebaseFacts, Diagnostic, Level, MetricUnit, Rule, RuleClass, RuleFactory, RuleMetadata,
+};
 use toml::Table;
 
-use crate::{FUNCTION_MAX_LINES, limit::LimitConfig};
+use super::{FUNCTION_MAX_LINES, limit::LimitConfig};
 
-pub struct FunctionMaxLinesFactory;
+pub(super) struct FunctionMaxLinesFactory;
 
 impl RuleFactory for FunctionMaxLinesFactory {
     fn id(&self) -> &'static str {
@@ -50,6 +52,7 @@ impl Rule for FunctionMaxLines {
                     span: function.name_span,
                     observed: Some(function.line_count),
                     limit: Some(self.0.limit),
+                    unit: Some(MetricUnit::PhysicalLines),
                 });
             }
         }

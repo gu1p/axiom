@@ -1,10 +1,10 @@
 use camino::Utf8Path;
-use policy_core::{AnalysisError, Diagnostic, Level, RuleClass, SourceSpan};
+use policy_core::{AnalysisError, Diagnostic, Level, MetricUnit, RuleClass, SourceSpan};
 use serde::Serialize;
 
 use crate::tools::{ToolDiagnostic, ToolReport};
 
-use super::configuration;
+use super::super::configuration;
 
 #[derive(Serialize)]
 struct JsonOutput {
@@ -27,6 +27,7 @@ struct JsonDiagnostic {
     span: Option<SourceSpan>,
     observed: Option<u32>,
     limit: Option<u32>,
+    unit: Option<MetricUnit>,
     configuration: Option<configuration::JsonHint>,
 }
 
@@ -114,6 +115,7 @@ impl From<&Diagnostic> for JsonDiagnostic {
             span: Some(value.span),
             observed: value.observed,
             limit: value.limit,
+            unit: value.unit,
             configuration: None,
         }
     }
@@ -133,6 +135,7 @@ impl From<&AnalysisError> for JsonDiagnostic {
             span: value.span,
             observed: None,
             limit: None,
+            unit: None,
             configuration: None,
         }
     }
@@ -156,6 +159,7 @@ impl From<&ToolDiagnostic> for JsonDiagnostic {
             span: value.span,
             observed: None,
             limit: None,
+            unit: None,
             configuration: None,
         }
     }

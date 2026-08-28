@@ -1,9 +1,11 @@
-use policy_core::{CodebaseFacts, Diagnostic, Level, Rule, RuleClass, RuleFactory, RuleMetadata};
+use policy_core::{
+    CodebaseFacts, Diagnostic, Level, MetricUnit, Rule, RuleClass, RuleFactory, RuleMetadata,
+};
 use toml::Table;
 
-use crate::{FILE_MAX_LINES, limit::LimitConfig};
+use super::{FILE_MAX_LINES, limit::LimitConfig};
 
-pub struct FileMaxLinesFactory;
+pub(super) struct FileMaxLinesFactory;
 
 impl RuleFactory for FileMaxLinesFactory {
     fn id(&self) -> &'static str {
@@ -36,7 +38,6 @@ impl Rule for FileMaxLines {
             if file.line_count <= self.0.limit {
                 continue;
             }
-            let end = usize::from(!file.source.text.is_empty());
             diagnostics.push(Diagnostic {
                 rule_id: FILE_MAX_LINES.to_owned(),
                 class: RuleClass::Budget,
@@ -44,9 +45,10 @@ impl Rule for FileMaxLines {
                 message: format!("file has {} physical lines", file.line_count),
                 help: "split the file into focused modules".to_owned(),
                 path: file.source.relative_path.clone(),
-                span: file.source.lines.span(&file.source.text, 0, end),
+                span: file.source.lines.span(&file.source.text, 0, 0),
                 observed: Some(file.line_count),
                 limit: Some(self.0.limit),
+                unit: Some(MetricUnit::PhysicalLines),
             });
         }
     }

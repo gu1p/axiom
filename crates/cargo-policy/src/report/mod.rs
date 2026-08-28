@@ -1,9 +1,10 @@
 mod configuration;
-pub mod human;
-pub mod json;
+mod formats;
 mod output;
 pub(super) mod progress;
 pub(super) mod summary;
+
+pub use formats::{human, json};
 
 use camino::Utf8Path;
 use policy_core::{AnalysisInput, Diagnostic};

@@ -1,6 +1,9 @@
 mod cargo;
 mod clippy;
+mod process;
 mod rustdoc;
+
+pub(crate) use process::{configure_group, terminate_group};
 
 use core::time::Duration;
 use std::env;

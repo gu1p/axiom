@@ -1,15 +1,11 @@
 //! Built-in executable-policy rule registry.
 
-mod file_lines;
-mod function_lines;
-mod limit;
 mod semantic;
 mod separate_test_files;
+mod size;
 
 use policy_core::{RuleRegistry, SemanticFindingKind};
 
-const FILE_MAX_LINES: &str = "size/file-max-lines";
-const FUNCTION_MAX_LINES: &str = "size/function-max-lines";
 const SEPARATE_TEST_FILES: &str = "testing/separate-test-files";
 pub const PRIVATE_DEAD_CODE: &str = "dead-code/private";
 const DEAD_PUBLIC: &str = "dead-code/public";
@@ -20,8 +16,7 @@ const UNNECESSARY_CRATE: &str = "visibility/unnecessary-crate";
 
 pub fn registry() -> RuleRegistry {
     let mut registry = RuleRegistry::default();
-    registry.register(Box::new(file_lines::FileMaxLinesFactory));
-    registry.register(Box::new(function_lines::FunctionMaxLinesFactory));
+    size::register(&mut registry);
     registry.register(Box::new(separate_test_files::SeparateTestFilesFactory));
     register_semantic_rules(&mut registry);
     registry

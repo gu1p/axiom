@@ -5,20 +5,20 @@ mod diagnostic;
 mod engine;
 mod facts;
 mod lines;
-mod registry;
 
 pub use config::{
     ClippyConfig, ClippyFeatureMode, ClippyFeatureSelection, ClippyLintProfile,
     ClippyTargetCoverage, ClippyWarningPolicy, PolicyConfig, SourceConfig, ToolConfig,
 };
-pub use diagnostic::{Diagnostic, Level, Position, RuleClass, RuleMetadata, RuleScope, SourceSpan};
-pub use engine::{Engine, FactProvider, Rule};
+pub use diagnostic::{
+    Diagnostic, Level, MetricUnit, Position, RuleClass, RuleMetadata, RuleScope, SourceSpan,
+};
+pub use engine::{Engine, FactProvider, Rule, RuleFactory, RuleRegistry};
 pub use facts::{
     AnalysisInput, CodebaseFacts, FunctionFact, RustEdition, SemanticFindingFact,
     SemanticFindingKind, SourceFileFact, SourceKind, SourceUnit, TestCodeFact, TestCodeKind,
 };
 pub use lines::LineIndex;
-pub use registry::{RuleFactory, RuleRegistry};
 
 use camino::Utf8PathBuf;
 

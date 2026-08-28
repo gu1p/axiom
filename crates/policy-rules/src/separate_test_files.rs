@@ -84,6 +84,7 @@ impl Rule for SeparateTestFiles {
                 span: fact.span,
                 observed: None,
                 limit: None,
+                unit: None,
             }));
         }
     }

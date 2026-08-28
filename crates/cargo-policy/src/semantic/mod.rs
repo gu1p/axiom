@@ -184,5 +184,5 @@ fn offline() -> bool {
 }
 
 #[cfg(test)]
-#[path = "tests/semantic.rs"]
+#[path = "../tests/semantic.rs"]
 mod tests;

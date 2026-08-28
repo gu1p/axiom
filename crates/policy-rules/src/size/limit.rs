@@ -4,13 +4,13 @@ use toml::Table;
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LimitConfig {
+pub(super) struct LimitConfig {
     pub level: Level,
     pub limit: u32,
 }
 
 impl LimitConfig {
-    pub fn parse(id: &str, table: &Table) -> Result<Self, String> {
+    pub(super) fn parse(id: &str, table: &Table) -> Result<Self, String> {
         let config: Self = toml::Value::Table(table.clone())
             .try_into()
             .map_err(|error| format!("invalid configuration for `{id}`: {error}"))?;
@@ -24,5 +24,5 @@ impl LimitConfig {
 }
 
 #[cfg(test)]
-#[path = "tests/limit.rs"]
+#[path = "../tests/limit.rs"]
 mod tests;

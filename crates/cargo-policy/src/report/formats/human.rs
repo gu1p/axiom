@@ -1,10 +1,12 @@
 use camino::Utf8Path;
-use policy_core::{AnalysisError, AnalysisInput, Diagnostic, Level, SourceSpan, SourceUnit};
+use policy_core::{
+    AnalysisError, AnalysisInput, Diagnostic, Level, MetricUnit, SourceSpan, SourceUnit,
+};
 
 use crate::args::ColorChoice;
 use crate::tools::{ToolDiagnostic, ToolReport};
 
-use super::{
+use super::super::{
     configuration,
     output::{color_enabled, paint, severity_color, stderr_line, stderr_write},
 };
@@ -23,7 +25,7 @@ pub fn check(
             tool_diagnostic(diagnostic, input, config_path, color);
         }
     }
-    super::summary::write(diagnostics, tools, input, false);
+    super::super::summary::write(diagnostics, tools, input, false);
 }
 
 fn policy_diagnostics(
@@ -45,7 +47,11 @@ fn policy_diagnostics(
         ));
         location(&diagnostic.path, diagnostic.span, input, color);
         if let Some(limit) = diagnostic.limit {
-            stderr_line(format_args!("  = limit: {limit} physical lines"));
+            if let Some(unit) = diagnostic.unit {
+                stderr_line(format_args!("  = limit: {limit} {}", unit_label(unit)));
+            } else {
+                stderr_line(format_args!("  = limit: {limit}"));
+            }
         }
         stderr_line(format_args!("  = help: {}", diagnostic.help));
         configuration::write_human(config_path, &configuration::policy(diagnostic));
@@ -59,7 +65,7 @@ pub(crate) fn write_policy_diagnostics(
     config_path: &Utf8Path,
     choice: ColorChoice,
 ) {
-    super::progress::suspend(|| {
+    super::super::progress::suspend(|| {
         policy_diagnostics(diagnostics, input, config_path, color_enabled(choice));
     });
 }
@@ -107,7 +113,7 @@ pub(crate) fn write_tool_report(
     config_path: &Utf8Path,
     choice: ColorChoice,
 ) {
-    super::progress::suspend(|| {
+    super::super::progress::suspend(|| {
         let color = color_enabled(choice);
         for diagnostic in &report.diagnostics {
             tool_diagnostic(diagnostic, input, config_path, color);
@@ -128,6 +134,14 @@ pub fn operational(errors: &[AnalysisError], input: Option<&AnalysisInput>, choi
         stderr_line(format_args!(""));
     }
     stderr_line(format_args!("axiom check could not complete"));
+}
+
+const fn unit_label(unit: MetricUnit) -> &'static str {
+    match unit {
+        MetricUnit::Files => "files",
+        MetricUnit::CodeLines => "code lines",
+        MetricUnit::PhysicalLines => "physical lines",
+    }
 }
 
 fn location(path: &camino::Utf8Path, span: SourceSpan, input: &AnalysisInput, color: bool) {

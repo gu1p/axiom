@@ -2,6 +2,8 @@
 
 mod test_items;
 
+use std::collections::BTreeSet;
+
 use policy_core::{
     AnalysisError, AnalysisInput, CodebaseFacts, FactProvider, FunctionFact, RustEdition,
     SourceFileFact,
@@ -42,6 +44,7 @@ impl FactProvider for SyntaxFactProvider {
                 facts.files.push(SourceFileFact {
                     source: source.clone(),
                     line_count: source.lines.physical_lines(),
+                    code_line_count: code_line_count(source, tree.syntax()),
                     functions,
                     test_code: test_items::collect(source, tree.syntax()),
                 });
@@ -53,6 +56,24 @@ impl FactProvider for SyntaxFactProvider {
             Err(errors)
         }
     }
+}
+
+fn code_line_count(source: &policy_core::SourceUnit, syntax: &ra_ap_syntax::SyntaxNode) -> u32 {
+    let mut code_lines = BTreeSet::new();
+    for token in syntax
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| !matches!(token.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT))
+    {
+        let range = token.text_range();
+        let start: usize = range.start().into();
+        let Some((last_offset, _)) = token.text().char_indices().next_back() else {
+            continue;
+        };
+        let span = source.lines.span(&source.text, start, start + last_offset);
+        code_lines.extend(span.start.line..=span.end.line);
+    }
+    code_lines.len().try_into().unwrap_or(u32::MAX)
 }
 
 fn function_fact(source: &policy_core::SourceUnit, function: &ast::Fn) -> FunctionFact {

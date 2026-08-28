@@ -94,6 +94,48 @@ scope = "{scope}"
     .expect("scoped policy");
 }
 
+fn write_directory_policy(workspace: &TestWorkspace) {
+    fs::write(
+        workspace.root().join("policy.toml"),
+        r#"version = 1
+
+[sources]
+include = ["**/*.rs"]
+exclude = []
+
+[tools.clippy]
+enabled = false
+
+[rules."size/directory-max-files"]
+level = "deny"
+limit = 5
+scope = "production"
+
+[rules."size/directory-max-lines"]
+level = "deny"
+limit = 1000
+scope = "production"
+"#,
+    )
+    .expect("directory policy");
+}
+
+fn write_rust_source(workspace: &TestWorkspace, path: &str, source: &str) {
+    let path = workspace.root().join(path);
+    fs::create_dir_all(path.parent().expect("source parent")).expect("source directory");
+    fs::write(path, source).expect("Rust source");
+}
+
+fn directory_line_fixture(constants: usize) -> String {
+    let mut source = String::from(
+        "// an ordinary comment does not count\n//! documentation does not count\n\n#[cfg(test)]\nfn inline_test() {}\n",
+    );
+    for _ in 0..constants {
+        source.push_str("const _: () = ();\n");
+    }
+    source
+}
+
 #[test]
 fn clean_workspace_passes_with_human_summary() {
     let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 50, 200);
@@ -227,6 +269,95 @@ fn file_limit_is_inclusive() {
         let output = command(&workspace).output().expect("run cargo-policy");
         assert!(output.status.success(), "{lines} lines should pass");
     }
+}
+
+#[test]
+fn directory_file_limit_checks_each_level_and_excludes_test_files() {
+    let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 50, 200);
+    write_directory_policy(&workspace);
+    for name in ["a", "b", "c", "d"] {
+        write_rust_source(&workspace, &format!("src/{name}.rs"), "pub fn item() {}\n");
+    }
+    write_rust_source(
+        &workspace,
+        "src/ignored_tests.rs",
+        "pub fn test_support() {}\n",
+    );
+    for name in ["a", "b", "c", "d", "e"] {
+        write_rust_source(
+            &workspace,
+            &format!("src/domain/{name}.rs"),
+            "pub fn item() {}\n",
+        );
+    }
+
+    let boundary = command(&workspace)
+        .arg("--size")
+        .output()
+        .expect("run directory boundary policy");
+    assert!(boundary.status.success());
+
+    write_rust_source(&workspace, "src/domain/f.rs", "pub fn item() {}\n");
+    let output = command(&workspace)
+        .args(["--size", "--format", "json"])
+        .output()
+        .expect("run directory file policy");
+    assert_eq!(output.status.code(), Some(1));
+    let document: Value = serde_json::from_slice(&output.stdout).expect("directory JSON");
+    let diagnostics = document["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["rule_id"], "size/directory-max-files");
+    assert_eq!(diagnostics[0]["path"], "src/domain/f.rs");
+    assert_eq!(diagnostics[0]["observed"], 6);
+    assert_eq!(diagnostics[0]["limit"], 5);
+    assert_eq!(diagnostics[0]["unit"], "files");
+    assert!(
+        diagnostics[0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("src/domain"))
+    );
+
+    let human = command(&workspace)
+        .arg("--size")
+        .output()
+        .expect("run human directory file policy");
+    assert_eq!(human.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&human.stderr).contains("limit: 5 files"));
+}
+
+#[test]
+fn directory_line_limit_counts_code_tokens_and_inline_tests() {
+    let workspace = TestWorkspace::new("pub fn small() {}\n", "deny", 50, 200);
+    write_directory_policy(&workspace);
+    write_rust_source(&workspace, "src/lines.rs", &directory_line_fixture(997));
+
+    let boundary = command(&workspace)
+        .arg("--size")
+        .output()
+        .expect("run directory line boundary policy");
+    assert!(boundary.status.success());
+
+    write_rust_source(&workspace, "src/lines.rs", &directory_line_fixture(998));
+    let output = command(&workspace)
+        .args(["--size", "--format", "json"])
+        .output()
+        .expect("run directory line policy");
+    assert_eq!(output.status.code(), Some(1));
+    let document: Value = serde_json::from_slice(&output.stdout).expect("directory JSON");
+    let diagnostics = document["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["rule_id"], "size/directory-max-lines");
+    assert_eq!(diagnostics[0]["path"], "src/lines.rs");
+    assert_eq!(diagnostics[0]["observed"], 1001);
+    assert_eq!(diagnostics[0]["limit"], 1000);
+    assert_eq!(diagnostics[0]["unit"], "code_lines");
+
+    let human = command(&workspace)
+        .arg("--size")
+        .output()
+        .expect("run human directory line policy");
+    assert_eq!(human.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&human.stderr).contains("limit: 1000 code lines"));
 }
 
 #[test]

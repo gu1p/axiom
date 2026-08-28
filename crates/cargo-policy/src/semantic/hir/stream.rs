@@ -5,8 +5,8 @@ use policy_core::{AnalysisError, AnalysisInput, CodebaseFacts};
 use serde::Deserialize;
 
 use super::append_diagnostic;
-use crate::process::{configure_group, terminate_group};
 use crate::semantic::types::{RawSemanticDiagnostic, SemanticReport};
+use crate::tools::{configure_group, terminate_group};
 
 const STREAM_SCHEMA: u32 = 1;
 

@@ -87,6 +87,7 @@ pub struct TestCodeFact {
 pub struct SourceFileFact {
     pub source: SourceUnit,
     pub line_count: u32,
+    pub code_line_count: u32,
     pub functions: Vec<FunctionFact>,
     pub test_code: Vec<TestCodeFact>,
 }

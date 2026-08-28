@@ -35,6 +35,16 @@ level = "deny"
 limit = 200
 scope = "production"
 
+[rules."size/directory-max-files"]
+level = "deny"
+limit = 5
+scope = "production"
+
+[rules."size/directory-max-lines"]
+level = "deny"
+limit = 1000
+scope = "production"
+
 [rules."testing/separate-test-files"]
 level = "deny"
 "#;

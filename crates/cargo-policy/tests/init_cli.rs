@@ -78,6 +78,12 @@ fn init_creates_the_default_policy_and_refuses_to_overwrite_it() {
         std::fs::read_to_string(workspace.root().join("policy.toml")).expect("initialized policy");
     assert!(config.contains("limit = 50"));
     assert!(config.contains("limit = 200"));
+    assert!(config.contains(
+        "[rules.\"size/directory-max-files\"]\nlevel = \"deny\"\nlimit = 5\nscope = \"production\""
+    ));
+    assert!(config.contains(
+        "[rules.\"size/directory-max-lines\"]\nlevel = \"deny\"\nlimit = 1000\nscope = \"production\""
+    ));
     assert!(config.contains("testing/separate-test-files"));
     assert!(config.contains("scope = \"production\""));
     assert!(config.contains("test = ["));
